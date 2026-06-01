@@ -2,15 +2,14 @@
 One-shot backfill script for streaming availability data.
 
 Designed to run once against a database that was populated before the
-upsert_streaming_availability bug was fixed (missing .select() call).
-It finds every media row that has zero rows in streaming_availability and
-fills them in via TMDB watch/providers.
+streaming upsert worked correctly.  Finds every media row that has no
+entries in streaming_availability and fills them in via TMDB watch/providers.
 
 Run manually:
     python -m bot.backfill_streaming
 
-In production this is triggered by the `backfill-streaming` job in
-nightly.yml, which is gated to workflow_dispatch so it never runs on cron.
+Triggered in production by the `backfill` job in nightly.yml, which is
+gated to workflow_dispatch so it never runs on the cron schedule.
 """
 
 import os
@@ -18,7 +17,7 @@ import sys
 import time
 
 from .tmdb import TmdbClient
-from .streaming import StreamingClient
+from .streaming import PROVIDER_MAP
 from .supabase_client import SupabaseClient
 
 
@@ -35,13 +34,7 @@ def load_env() -> dict[str, str]:
 
 
 def fetch_all_media(db: SupabaseClient) -> list[dict]:
-    """
-    Return every row from public.media as a list of dicts with keys:
-    id, tmdb_id, title, media_type.
-
-    Pages through the table in chunks of 1 000 to handle large catalogs
-    without hitting the default result-size cap.
-    """
+    """Fetch id, tmdb_id, title, media_type for every row in public.media."""
     print("[BACKFILL] Fetching all media rows from Supabase...")
     rows: list[dict] = []
     page_size = 1000
@@ -65,10 +58,7 @@ def fetch_all_media(db: SupabaseClient) -> list[dict]:
 
 
 def fetch_covered_media_ids(db: SupabaseClient) -> set[int]:
-    """
-    Return the set of media_id values that already have at least one row in
-    public.streaming_availability.  These titles are skipped by the backfill.
-    """
+    """Return the set of media_ids that already have streaming_availability rows."""
     print("[BACKFILL] Fetching media_ids already covered in streaming_availability...")
     covered: set[int] = set()
     page_size = 1000
@@ -97,7 +87,6 @@ def main() -> None:
     config = load_env()
 
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
-    streaming = StreamingClient()
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
     # ------------------------------------------------------------------ #
@@ -106,13 +95,11 @@ def main() -> None:
     all_media = fetch_all_media(db)
     covered_ids = fetch_covered_media_ids(db)
 
-    # A title needs backfilling if its Supabase id is not in covered_ids.
-    # Note: covered_ids may contain titles with providers=[] that were saved
-    # as explicit "no providers" rows — those are already handled correctly
-    # and don't need re-processing.
     pending = [row for row in all_media if row["id"] not in covered_ids]
-
-    print(f"[BACKFILL] {len(pending)} titles need streaming data, {len(all_media) - len(pending)} already covered.")
+    print(
+        f"[BACKFILL] {len(pending)} titles need streaming data, "
+        f"{len(all_media) - len(pending)} already covered."
+    )
 
     if not pending:
         print("[BACKFILL] Nothing to do. Exiting.")
@@ -122,37 +109,46 @@ def main() -> None:
     # Step 2 — Fetch providers and upsert for each pending title          #
     # ------------------------------------------------------------------ #
     total = len(pending)
-    saved = 0
+    updated = 0
 
     for i, row in enumerate(pending, start=1):
-        media_id = row["id"]
         tmdb_id = row["tmdb_id"]
         title = row["title"]
         media_type = row["media_type"]
 
-        providers = streaming.get_streaming_providers(
-            tmdb_id=tmdb_id,
-            media_type=media_type,
-            tmdb_client=tmdb,
-        )
+        # Fetch raw provider names from TMDB watch/providers
+        raw_providers = tmdb.get_watch_providers(tmdb_id, media_type)
+
+        # Apply the same standardized mapping used by the main bot
+        providers: list[str] = []
+        for raw_name in raw_providers:
+            mapped = PROVIDER_MAP.get(raw_name)
+            if mapped and mapped not in providers:
+                providers.append(mapped)
 
         print(f"[BACKFILL] {i}/{total} {title}: {providers}")
 
         if providers:
-            db.upsert_streaming_availability(media_id=media_id, providers=providers)
-            saved += 1
+            # Fetch the Supabase UUID fresh to guarantee we have the right FK
+            result = (
+                db.client.table("media")
+                .select("id")
+                .eq("tmdb_id", tmdb_id)
+                .single()
+                .execute()
+            )
+            media_uuid = result.data.get("id") if result.data else None
 
-        # Avoid hammering TMDB's watch/providers endpoint — 0.5s is enough
-        # headroom given the free-tier rate limit of ~40 req/s
-        time.sleep(0.5)
+            if media_uuid:
+                db.upsert_streaming_availability(media_id=media_uuid, providers=providers)
+                updated += 1
+
+        time.sleep(0.3)
 
     # ------------------------------------------------------------------ #
     # Step 3 — Summary                                                    #
     # ------------------------------------------------------------------ #
-    print(
-        f"\n[BACKFILL] Done. {saved}/{total} titles had streaming providers saved. "
-        f"{total - saved} had no providers on any tracked service."
-    )
+    print(f"\n[BACKFILL] Done. {updated} titles updated, {total - updated} had no providers.")
 
 
 if __name__ == "__main__":
