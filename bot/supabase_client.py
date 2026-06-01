@@ -60,20 +60,21 @@ class SupabaseClient:
         print(f"[Supabase] Upserting media: {media_dict.get('title')} (tmdb_id={media_dict.get('tmdb_id')})")
 
         try:
-            response = (
+            self.client.table("media").upsert(media_dict, on_conflict="tmdb_id").execute()
+
+            # Fetch the row id in a separate query — chaining .select() after
+            # .upsert() is not supported in supabase-py 2.x
+            result = (
                 self.client.table("media")
-                .upsert(media_dict, on_conflict="tmdb_id")
-                .select()   # required — without this, data=[] on conflict rows
+                .select("id")
+                .eq("tmdb_id", media_dict["tmdb_id"])
+                .single()
                 .execute()
             )
 
-            if response.data:
-                row_id = response.data[0].get("id")
-                print(f"[Supabase] media upsert OK → id={row_id}")
-                return row_id
-
-            print("[Supabase] media upsert returned no data rows.")
-            return None
+            row_id = result.data.get("id") if result.data else None
+            print(f"[Supabase] media upsert OK → id={row_id}")
+            return row_id
 
         except Exception as exc:
             print(f"[Supabase] Error upserting media '{media_dict.get('title')}': {exc}")
