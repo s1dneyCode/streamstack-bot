@@ -149,13 +149,12 @@ def main() -> None:
         rt_score = omdb.get_rt_score(title=title, year=year)
 
         # --- Streaming providers via TMDB watch/providers ---------------
+        # Fetched before the upsert so is_streamable_now is set correctly
         providers = streaming.get_streaming_providers(
             tmdb_id=tmdb_id,
             media_type=media_type,
             tmdb_client=tmdb,
         )
-        if index <= 10:
-            print(f"[BOT] Providers for {title}: {providers}")
 
         # --- Build the media record to upsert ---------------------------
         media_record = {
@@ -166,19 +165,32 @@ def main() -> None:
             "media_type": media_type,
             "release_date": item.get("release_date"),
             "rt_score": rt_score,
-            # is_in_theatres is always False in this MVP; a separate
-            # cinemas-data source would be needed to populate this correctly
+            # is_in_theatres is always False for now
             "is_in_theatres": False,
             # A title is considered "streamable now" if at least one
             # subscription service carries it in the US
             "is_streamable_now": len(providers) > 0,
         }
 
-        # --- Persist to Supabase ----------------------------------------
-        media_id = db.upsert_media(media_record)
+        # --- Persist media row to Supabase ------------------------------
+        db.upsert_media(media_record)
 
-        if media_id and providers:
-            db.upsert_streaming_availability(media_id=media_id, providers=providers)
+        # --- Fetch Supabase UUID then save streaming availability -------
+        # Query the UUID after upsert rather than relying on the upsert
+        # return value, which is not reliable across supabase-py versions
+        result = (
+            db.client.table("media")
+            .select("id")
+            .eq("tmdb_id", tmdb_id)
+            .single()
+            .execute()
+        )
+        media_uuid = result.data.get("id") if result.data else None
+
+        print(f"[BOT] Providers for {title}: {providers}")
+
+        if providers and media_uuid:
+            db.upsert_streaming_availability(media_id=media_uuid, providers=providers)
 
         # --- Progress log -----------------------------------------------
         score_str = f"{rt_score}%" if rt_score is not None else "N/A"
