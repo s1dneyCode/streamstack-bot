@@ -69,24 +69,52 @@ def main() -> None:
     # Step 1 — Fetch now-playing movies from TMDB                         #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 1: Fetching now-playing movies from TMDB...")
-    movies = tmdb.get_now_playing_movies(pages=3)
-    print(f"[BOT] Fetched {len(movies)} movies.")
+    now_playing = tmdb.get_now_playing_movies(pages=3)
+    print(f"[BOT] Fetched {len(now_playing)} now-playing movies.")
 
     # ------------------------------------------------------------------ #
     # Step 2 — Fetch on-air TV shows from TMDB                            #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 2: Fetching on-air TV shows from TMDB...")
-    shows = tmdb.get_on_air_tv(pages=3)
-    print(f"[BOT] Fetched {len(shows)} TV shows.")
+    on_air = tmdb.get_on_air_tv(pages=3)
+    print(f"[BOT] Fetched {len(on_air)} on-air TV shows.")
 
     # ------------------------------------------------------------------ #
-    # Step 3 — Combine and deduplicate by tmdb_id                         #
+    # Step 3 — Fetch upcoming movies from TMDB                            #
     # ------------------------------------------------------------------ #
-    print("\n[BOT] Step 3: Combining and deduplicating results...")
+    print("\n[BOT] Step 3: Fetching upcoming movies from TMDB...")
+    upcoming = tmdb.get_upcoming_movies(pages=3)
+    print(f"[BOT] Fetched {len(upcoming)} upcoming movies.")
+
+    # ------------------------------------------------------------------ #
+    # Step 4 — Fetch popular movies from TMDB                             #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 4: Fetching popular movies from TMDB...")
+    popular_movies = tmdb.get_popular_movies(pages=3)
+    print(f"[BOT] Fetched {len(popular_movies)} popular movies.")
+
+    # ------------------------------------------------------------------ #
+    # Step 5 — Fetch popular TV shows from TMDB                           #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 5: Fetching popular TV shows from TMDB...")
+    popular_tv = tmdb.get_popular_tv(pages=3)
+    print(f"[BOT] Fetched {len(popular_tv)} popular TV shows.")
+
+    # ------------------------------------------------------------------ #
+    # Step 6 — Fetch top-rated movies from TMDB                           #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 6: Fetching top-rated movies from TMDB...")
+    top_rated = tmdb.get_top_rated_movies(pages=2)
+    print(f"[BOT] Fetched {len(top_rated)} top-rated movies.")
+
+    # ------------------------------------------------------------------ #
+    # Step 7 — Combine and deduplicate by tmdb_id                         #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 7: Combining and deduplicating results...")
     combined: list[dict] = []
     seen_ids: set[int] = set()
 
-    for item in movies + shows:
+    for item in now_playing + on_air + upcoming + popular_movies + popular_tv + top_rated:
         tid = item["tmdb_id"]
         if tid not in seen_ids:
             seen_ids.add(tid)
@@ -95,9 +123,9 @@ def main() -> None:
     print(f"[BOT] {len(combined)} unique titles after deduplication.")
 
     # ------------------------------------------------------------------ #
-    # Step 4 — Load existing tmdb_ids from Supabase                       #
+    # Step 8 — Load existing tmdb_ids from Supabase                       #
     # ------------------------------------------------------------------ #
-    print("\n[BOT] Step 4: Loading existing tmdb_ids from Supabase...")
+    print("\n[BOT] Step 8: Loading existing tmdb_ids from Supabase...")
     existing_ids = db.get_existing_tmdb_ids()
 
     # Partition into new vs. already-stored titles
@@ -106,9 +134,9 @@ def main() -> None:
     print(f"[BOT] {len(new_items)} new titles to process, {skipped} already in DB.")
 
     # ------------------------------------------------------------------ #
-    # Step 5 — Enrich and persist each NEW title                          #
+    # Step 9 — Enrich and persist each NEW title                          #
     # ------------------------------------------------------------------ #
-    print("\n[BOT] Step 5: Enriching and saving new titles...")
+    print("\n[BOT] Step 9: Enriching and saving new titles...")
     total = len(new_items)
 
     for index, item in enumerate(new_items, start=1):
@@ -155,7 +183,7 @@ def main() -> None:
         print(f"[BOT] Processed {index}/{total}: {title} ({score_str})")
 
     # ------------------------------------------------------------------ #
-    # Step 6 — Summary                                                     #
+    # Step 10 — Summary                                                    #
     # ------------------------------------------------------------------ #
     print(f"\n[BOT] Done. {total} new titles added, {skipped} skipped (already exist).")
 

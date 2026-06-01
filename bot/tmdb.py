@@ -159,6 +159,150 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique TV shows.")
         return results
 
+    def get_upcoming_movies(self, pages: int = 3) -> list[dict]:
+        """Fetch movies with a US release date in the near future."""
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of upcoming movies...")
+            data = self._get(
+                "/movie/upcoming",
+                params={"region": "US", "language": "en-US", "page": page},
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("title", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "movie",
+                        "release_date": format_date(item.get("release_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique upcoming movies.")
+        return results
+
+    def get_popular_movies(self, pages: int = 3) -> list[dict]:
+        """Fetch the most-viewed movies on TMDB right now."""
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of popular movies...")
+            data = self._get(
+                "/movie/popular",
+                params={"region": "US", "language": "en-US", "page": page},
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("title", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "movie",
+                        "release_date": format_date(item.get("release_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique popular movies.")
+        return results
+
+    def get_popular_tv(self, pages: int = 3) -> list[dict]:
+        """Fetch the most-viewed TV shows on TMDB right now."""
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of popular TV...")
+            data = self._get(
+                "/tv/popular",
+                params={"language": "en-US", "page": page},
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("name", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "tv",
+                        "release_date": format_date(item.get("first_air_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique popular TV shows.")
+        return results
+
+    def get_top_rated_movies(self, pages: int = 2) -> list[dict]:
+        """Fetch highest-rated movies on TMDB."""
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of top rated movies...")
+            data = self._get(
+                "/movie/top_rated",
+                params={"region": "US", "language": "en-US", "page": page},
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("title", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "movie",
+                        "release_date": format_date(item.get("release_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique top rated movies.")
+        return results
+
     def get_watch_providers(self, tmdb_id: int, media_type: str) -> list[str]:
         """
         Return the names of US flatrate (subscription) streaming providers for

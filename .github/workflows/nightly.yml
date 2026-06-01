@@ -31,22 +31,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Temporary diagnostic step — prints secret lengths only, never values.
-      # Remove this step once secrets are confirmed working.
-      - name: Debug secret lengths
-        env:
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          python - <<'EOF'
-          import os
-          for var in ["TMDB_API_KEY", "OMDB_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]:
-              val = os.environ.get(var, "")
-              print(f"{var}: {len(val)} chars {'✓' if val else '✗ EMPTY'}")
-          EOF
-
       # Run the bot.  Secrets are injected as environment variables by the
       # Actions runner; they are never written to disk or echoed in logs.
       - name: Run bot
