@@ -154,6 +154,8 @@ def main() -> None:
             media_type=media_type,
             tmdb_client=tmdb,
         )
+        if index <= 10:
+            print(f"[BOT] Providers for {title}: {providers}")
 
         # --- Build the media record to upsert ---------------------------
         media_record = {

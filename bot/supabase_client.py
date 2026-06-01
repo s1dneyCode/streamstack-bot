@@ -63,6 +63,7 @@ class SupabaseClient:
             response = (
                 self.client.table("media")
                 .upsert(media_dict, on_conflict="tmdb_id")
+                .select()   # required — without this, data=[] on conflict rows
                 .execute()
             )
 
