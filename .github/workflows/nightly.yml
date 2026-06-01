@@ -39,4 +39,4 @@ jobs:
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python bot/main.py
+        run: python -m bot.main
