@@ -16,13 +16,12 @@ import os
 import sys
 import time
 
-from .tmdb import TmdbClient
-from .streaming import PROVIDER_MAP
+from .streaming import StreamingClient
 from .supabase_client import SupabaseClient
 
 
 def load_env() -> dict[str, str]:
-    required = ["TMDB_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
+    required = ["STREAMING_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
     config: dict[str, str] = {}
     for key in required:
         value = os.environ.get(key)
@@ -86,7 +85,7 @@ def main() -> None:
     print("[BACKFILL] Starting streaming availability backfill...")
     config = load_env()
 
-    tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
+    streaming = StreamingClient(api_key=config["STREAMING_API_KEY"])
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
     # ------------------------------------------------------------------ #
@@ -116,15 +115,7 @@ def main() -> None:
         title = row["title"]
         media_type = row["media_type"]
 
-        # Fetch raw provider names from TMDB watch/providers
-        raw_providers = tmdb.get_watch_providers(tmdb_id, media_type)
-
-        # Apply the same standardized mapping used by the main bot
-        providers: list[str] = []
-        for raw_name in raw_providers:
-            mapped = PROVIDER_MAP.get(raw_name)
-            if mapped and mapped not in providers:
-                providers.append(mapped)
+        providers = streaming.get_streaming_providers(tmdb_id, media_type)
 
         print(f"[BACKFILL] {i}/{total} {title}: {providers}")
 

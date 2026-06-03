@@ -1,80 +1,91 @@
 """
-Streaming availability module.
+Streaming availability client — Streaming Availability API by Movie of the Night.
 
-MVP implementation: delegates to TMDB's watch/providers endpoint rather than
-integrating a dedicated streaming-availability API.  The public interface is
-intentionally kept API-agnostic so we can swap the data source later without
-touching main.py or supabase_client.py.
-
-When the dedicated API is introduced:
-1. Add the new client class here.
-2. Replace the body of get_streaming_providers while keeping its signature.
-3. Remove the tmdb_client parameter (or make it optional) as it will no longer
-   be needed.
+Reference: https://docs.movieofthenight.com/
+Endpoint: GET /v4/shows/{type}/{tmdb_id}?country=us
 """
 
-from bot.tmdb import TmdbClient
+import time
+import requests
 
-# Maps raw TMDB provider names to the canonical names we store in the database.
-# Any provider whose name is NOT a key here is silently ignored — we only track
-# the major subscription services that users actually care about.
+BASE_URL = "https://api.movieofthenight.com/v4"
+
+# Maps Streaming Availability API service slugs to the canonical names stored
+# in the database.  Services not listed here are silently ignored.
 PROVIDER_MAP: dict[str, str] = {
-    "Netflix": "Netflix",
-    "Amazon Prime Video": "Prime",
-    "Max": "Max",
-    "Disney Plus": "Disney+",
-    "Apple TV Plus": "Apple TV",
+    "netflix": "Netflix",
+    "prime": "Prime",
+    "max": "Max",
+    "disney": "Disney+",
+    "apple": "Apple TV",
+    "hulu": "Hulu",
 }
 
 
 class StreamingClient:
-    """
-    Resolves streaming availability for a given title.
+    """Fetches subscription streaming availability from the Movie of the Night API."""
 
-    Currently backed by TMDB watch providers; designed to be re-backed by a
-    dedicated service (e.g. Streaming Availability API by Movie of the Night)
-    in a future iteration.
-    """
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+        self.headers = {"X-API-Key": api_key}
 
-    def get_streaming_providers(
-        self,
-        tmdb_id: int,
-        media_type: str,
-        tmdb_client: TmdbClient,
-    ) -> list[str]:
+    def get_streaming_providers(self, tmdb_id: int, media_type: str) -> list[str]:
         """
-        Return the list of *known* streaming providers that carry this title in
-        the US.
-
-        Fetches raw provider names from TMDB, then filters and maps them
-        through PROVIDER_MAP.  Providers not present in PROVIDER_MAP are
-        dropped so we don't pollute the database with obscure or short-lived
-        services.
+        Return canonical provider names that carry this title on subscription
+        in the US.
 
         Parameters
         ----------
-        tmdb_id      TMDB numeric identifier for the title.
-        media_type   'movie' or 'tv' — used to build the TMDB endpoint path.
-        tmdb_client  An initialised TmdbClient instance (injected to avoid
-                     creating a second HTTP client inside this module).
+        tmdb_id     TMDB numeric ID for the title.
+        media_type  'movie' or 'tv' — 'tv' is mapped to 'series' for the API.
 
         Returns
         -------
-        A deduplicated list of canonical provider name strings, e.g.
-        ['Netflix', 'Prime'].  Empty list when not available anywhere.
+        Deduplicated list of canonical provider names (e.g. ['Netflix', 'Hulu']),
+        or [] when the title is not found or has no tracked subscription services.
         """
-        raw_providers = tmdb_client.get_watch_providers(tmdb_id, media_type)
+        # The API uses 'series' for TV shows, not 'tv'
+        api_type = "series" if media_type == "tv" else "movie"
+        url = f"{BASE_URL}/shows/{api_type}/{tmdb_id}"
+        params = {"country": "us"}
 
-        # Translate raw names to canonical names, skipping unknowns
-        canonical: list[str] = []
-        for raw_name in raw_providers:
-            mapped = PROVIDER_MAP.get(raw_name)
-            if mapped and mapped not in canonical:
-                canonical.append(mapped)
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                response = requests.get(
+                    url, headers=self.headers, params=params, timeout=15
+                )
 
-        if canonical:
-            print(f"[Streaming] {tmdb_id} available on: {', '.join(canonical)}")
+                # 404 means the title simply isn't in the API — not a transient error
+                if response.status_code == 404:
+                    print(f"[Streaming] {tmdb_id} not found in Streaming Availability API.")
+                    return []
+
+                response.raise_for_status()
+                data = response.json()
+                break
+
+            except requests.RequestException as exc:
+                last_exc = exc
+                print(f"[Streaming] Request failed for {tmdb_id} (attempt {attempt}/3): {exc}")
+                if attempt < 3:
+                    time.sleep(2)
         else:
-            print(f"[Streaming] {tmdb_id} not found on any tracked provider.")
+            print(f"[Streaming] All retries exhausted for {tmdb_id}: {last_exc}")
+            return []
 
-        return canonical
+        # The API returns streamingInfo keyed by country code
+        streaming_info = data.get("result", {}).get("streamingInfo", {}).get("us", [])
+
+        providers: list[str] = []
+        for entry in streaming_info:
+            # Only include subscription-type access, not rent/buy/free
+            if entry.get("streamingType") != "subscription":
+                continue
+            service = entry.get("service", "")
+            mapped = PROVIDER_MAP.get(service)
+            if mapped and mapped not in providers:
+                providers.append(mapped)
+
+        print(f"[Streaming] {tmdb_id}: {providers if providers else 'no tracked providers'}")
+        return providers
