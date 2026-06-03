@@ -100,6 +100,10 @@ def main() -> None:
         f"{len(all_media) - len(pending)} already covered."
     )
 
+    # Debug: test API response shape before processing the full list
+    print("[BACKFILL] Running API debug test...")
+    streaming.test_single_title()
+
     if not pending:
         print("[BACKFILL] Nothing to do. Exiting.")
         return

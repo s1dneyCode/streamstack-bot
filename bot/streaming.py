@@ -29,6 +29,14 @@ class StreamingClient:
         self.api_key = api_key
         self.headers = {"X-API-Key": api_key}
 
+    def test_single_title(self) -> None:
+        # Test with Breaking Bad (TMDB id: 1396, type: tv)
+        url = f"{BASE_URL}/shows/series/1396"
+        params = {"country": "us"}
+        response = requests.get(url, headers=self.headers, params=params)
+        print(f"[DEBUG] Status: {response.status_code}")
+        print(f"[DEBUG] Response: {response.text[:500]}")
+
     def get_streaming_providers(self, tmdb_id: int, media_type: str) -> list[str]:
         """
         Return canonical provider names that carry this title on subscription
