@@ -132,6 +132,7 @@ def main() -> None:
 
             if media_uuid:
                 db.upsert_streaming_availability(media_id=media_uuid, providers=providers)
+                db.update_streaming_last_checked(media_uuid)
                 updated += 1
 
         time.sleep(0.3)

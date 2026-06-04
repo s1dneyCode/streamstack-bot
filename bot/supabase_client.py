@@ -28,6 +28,8 @@ Expected schema (create once in the Supabase dashboard / migrations):
         UNIQUE (media_id, provider_name, region)
 """
 
+from datetime import date, datetime, timedelta, timezone
+
 from supabase import create_client, Client
 
 
@@ -112,9 +114,93 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error upserting streaming availability for media_id={media_id}: {exc}")
 
+    def delete_streaming_providers(self, media_id: int) -> None:
+        """Delete all streaming_availability rows for a media row before re-inserting."""
+        try:
+            self.client.table("streaming_availability").delete().eq("media_id", media_id).execute()
+            print(f"[Supabase] Deleted streaming rows for media_id={media_id}.")
+        except Exception as exc:
+            print(f"[Supabase] Error deleting streaming rows for media_id={media_id}: {exc}")
+
+    def update_streaming_last_checked(self, media_id: int) -> None:
+        """Stamp streaming_last_checked = now() on the media row."""
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            self.client.table("media").update({"streaming_last_checked": now}).eq("id", media_id).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error updating streaming_last_checked for media_id={media_id}: {exc}")
+
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
+
+    def get_titles_to_reverify(self, today: date) -> list[dict]:
+        """
+        Return titles whose streaming availability should be re-checked today.
+
+        Five categories with different re-check frequencies:
+          - Coming Soon          (release_date > today)              — every 7 days or never checked
+          - In Theatres recent   (in theatres, released ≤ 60d ago)   — every 7 days
+          - In Theatres old      (in theatres, released > 60d ago)   — every 30 days
+          - Streamable           (is_streamable_now = true)          — every 30 days
+          - Old titles           (released > 365d ago)               — every 90 days
+        """
+        cols = "id, tmdb_id, title, media_type, release_date, is_in_theatres"
+        today_str        = today.isoformat()
+        seven_days_ago   = (today - timedelta(days=7)).isoformat()
+        thirty_days_ago  = (today - timedelta(days=30)).isoformat()
+        sixty_days_ago   = (today - timedelta(days=60)).isoformat()
+        ninety_days_ago  = (today - timedelta(days=90)).isoformat()
+        one_year_ago     = (today - timedelta(days=365)).isoformat()
+
+        results: list[dict] = []
+        seen: set[int] = set()
+
+        def _add(rows: list[dict]) -> None:
+            for row in rows:
+                if row["id"] not in seen:
+                    seen.add(row["id"])
+                    results.append(row)
+
+        try:
+            # Coming Soon — null or stale after 7 days
+            _add((self.client.table("media").select(cols)
+                .gt("release_date", today_str)
+                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .execute()).data or [])
+
+            # In Theatres, recent release — stale after 7 days
+            _add((self.client.table("media").select(cols)
+                .eq("is_in_theatres", True)
+                .lte("release_date", today_str)
+                .gte("release_date", sixty_days_ago)
+                .lt("streaming_last_checked", seven_days_ago)
+                .execute()).data or [])
+
+            # In Theatres, older release — stale after 30 days
+            _add((self.client.table("media").select(cols)
+                .eq("is_in_theatres", True)
+                .lt("release_date", sixty_days_ago)
+                .lt("streaming_last_checked", thirty_days_ago)
+                .execute()).data or [])
+
+            # Streamable titles — stale after 30 days
+            _add((self.client.table("media").select(cols)
+                .eq("is_streamable_now", True)
+                .lt("streaming_last_checked", thirty_days_ago)
+                .execute()).data or [])
+
+            # Old titles — stale after 90 days
+            _add((self.client.table("media").select(cols)
+                .lt("release_date", one_year_ago)
+                .lt("streaming_last_checked", ninety_days_ago)
+                .execute()).data or [])
+
+        except Exception as exc:
+            print(f"[Supabase] Error fetching titles to reverify: {exc}")
+
+        print(f"[Supabase] {len(results)} titles queued for re-verification.")
+        return results
 
     def get_existing_tmdb_ids(self) -> set[int]:
         """

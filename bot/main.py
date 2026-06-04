@@ -16,6 +16,8 @@ In production this file is invoked by the GitHub Actions nightly workflow
 
 import os
 import sys
+import time
+from datetime import date
 
 from .tmdb import TmdbClient
 from .omdb import OmdbClient
@@ -196,7 +198,36 @@ def main() -> None:
         print(f"[BOT] Processed {index}/{total}: {title} ({score_str})")
 
     # ------------------------------------------------------------------ #
-    # Step 10 — Summary                                                    #
+    # Step 10 — Re-verify streaming providers for existing titles         #
+    # ------------------------------------------------------------------ #
+    today = date.today()
+    reverify_list = db.get_titles_to_reverify(today)
+    print(f"\n[BOT] Step 10: Re-verifying streaming providers for {len(reverify_list)} existing titles...")
+
+    reverified = 0
+    for item in reverify_list:
+        media_id   = item["id"]
+        tmdb_id    = item["tmdb_id"]
+        title      = item["title"]
+        media_type = item["media_type"]
+
+        providers = streaming.get_streaming_providers(tmdb_id=tmdb_id, media_type=media_type)
+
+        db.delete_streaming_providers(media_id)
+
+        if providers:
+            db.upsert_streaming_availability(media_id=media_id, providers=providers)
+
+        db.update_streaming_last_checked(media_id)
+        reverified += 1
+
+        print(f"[BOT] Re-verified {title}: {providers}")
+        time.sleep(0.5)
+
+    print(f"[BOT] Re-verification done. {reverified} titles updated.")
+
+    # ------------------------------------------------------------------ #
+    # Step 11 — Summary                                                    #
     # ------------------------------------------------------------------ #
     print(f"\n[BOT] Done. {total} new titles added, {skipped} skipped (already exist).")
 
