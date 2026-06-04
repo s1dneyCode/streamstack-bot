@@ -99,7 +99,7 @@ def main() -> None:
         f"{BASE_URL}/search/",
         params={
             "apiKey": config["WATCHMODE_API_KEY"],
-            "search_field": "tmdb_id",
+            "search_field": "tmdb_tv_id",
             "search_value": "1396",
             "types": "tv_series",
         },

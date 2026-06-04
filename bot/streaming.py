@@ -60,9 +60,10 @@ class StreamingClient:
             # Step 1 — Resolve TMDB id → WatchMode title id              #
             # ---------------------------------------------------------- #
             search_type = "movie" if media_type == "movie" else "tv_series"
+            search_field = "tmdb_movie_id" if media_type == "movie" else "tmdb_tv_id"
             search_params = {
                 "apiKey": self.api_key,
-                "search_field": "tmdb_id",
+                "search_field": search_field,
                 "search_value": str(tmdb_id),
                 "types": search_type,
             }
