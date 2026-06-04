@@ -1,99 +1,122 @@
 """
-Streaming availability client — Streaming Availability API by Movie of the Night.
+Streaming availability client — WatchMode API.
 
-Reference: https://docs.movieofthenight.com/
-Endpoint: GET /v4/shows/{type}/{tmdb_id}?country=us
+Reference: https://api.watchmode.com/docs/
+Two-step lookup per title:
+  1. GET /search/?search_field=tmdb_id  →  resolve to a WatchMode title id
+  2. GET /title/{id}/sources/           →  get subscription sources
+Each call to get_streaming_providers costs 2 API credits.
 """
 
 import time
 import requests
 
-BASE_URL = "https://api.movieofthenight.com/v4"
-
-# Maps Streaming Availability API service slugs to the canonical names stored
-# in the database.  Services not listed here are silently ignored.
-PROVIDER_MAP: dict[str, str] = {
-    "netflix": "Netflix",
-    "prime": "Prime",
-    "max": "Max",
-    "disney": "Disney+",
-    "apple": "Apple TV",
-    "hulu": "Hulu",
-}
+BASE_URL = "https://api.watchmode.com/v1"
 
 
 class StreamingClient:
-    """Fetches subscription streaming availability from the Movie of the Night API."""
+    """Fetches subscription streaming availability from the WatchMode API."""
+
+    # WatchMode source IDs for tracked platforms across US / BR / MX.
+    # Multiple IDs can map to the same canonical name (one per region).
+    TRACKED_SOURCES: dict[int, str] = {
+        203: "Netflix",    # Netflix US
+        26:  "Prime",      # Amazon Prime Video US
+        387: "Max",        # Max US
+        372: "Disney+",    # Disney Plus US
+        371: "Apple TV",   # Apple TV Plus US
+        23:  "Netflix",    # Netflix BR
+        119: "Prime",      # Amazon Prime Video BR
+        484: "Disney+",    # Disney Plus BR
+        619: "Apple TV",   # Apple TV Plus BR
+        725: "Max",        # Max BR
+        188: "Netflix",    # Netflix MX
+        631: "Prime",      # Amazon Prime Video MX
+        658: "Disney+",    # Disney Plus MX
+        659: "Apple TV",   # Apple TV Plus MX
+        726: "Max",        # Max MX
+    }
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
-        self.headers = {"X-API-Key": api_key}
-
-    def test_single_title(self) -> None:
-        # Test with Breaking Bad (TMDB id: 1396, type: tv)
-        url = f"{BASE_URL}/shows/series/1396"
-        params = {"country": "us"}
-        response = requests.get(url, headers=self.headers, params=params)
-        print(f"[DEBUG] Status: {response.status_code}")
-        print(f"[DEBUG] Response: {response.text[:500]}")
 
     def get_streaming_providers(self, tmdb_id: int, media_type: str) -> list[str]:
         """
-        Return canonical provider names that carry this title on subscription
-        in the US.
+        Return deduplicated canonical provider names for a title in US/BR/MX.
 
         Parameters
         ----------
         tmdb_id     TMDB numeric ID for the title.
-        media_type  'movie' or 'tv' — 'tv' is mapped to 'series' for the API.
+        media_type  'movie' or 'tv'.
 
         Returns
         -------
-        Deduplicated list of canonical provider names (e.g. ['Netflix', 'Hulu']),
-        or [] when the title is not found or has no tracked subscription services.
+        List of canonical provider name strings, e.g. ['Netflix', 'Prime'].
+        Returns [] on any error or when no tracked providers carry the title.
+        Costs 2 API credits per call (search + sources).
         """
-        # The API uses 'series' for TV shows, not 'tv'
-        api_type = "series" if media_type == "tv" else "movie"
-        url = f"{BASE_URL}/shows/{api_type}/{tmdb_id}"
-        params = {"country": "us"}
+        try:
+            # ---------------------------------------------------------- #
+            # Step 1 — Resolve TMDB id → WatchMode title id              #
+            # ---------------------------------------------------------- #
+            search_type = "movie" if media_type == "movie" else "tv_series"
+            search_params = {
+                "apiKey": self.api_key,
+                "search_field": "tmdb_id",
+                "search_value": str(tmdb_id),
+                "types": search_type,
+            }
+            search_response = requests.get(
+                f"{BASE_URL}/search/", params=search_params, timeout=10
+            )
 
-        last_exc: Exception | None = None
-        for attempt in range(1, 4):
-            try:
-                response = requests.get(
-                    url, headers=self.headers, params=params, timeout=15
+            if search_response.status_code != 200:
+                print(
+                    f"[Streaming] Search failed for tmdb_id={tmdb_id}: "
+                    f"{search_response.status_code}"
                 )
+                return []
 
-                # 404 means the title simply isn't in the API — not a transient error
-                if response.status_code == 404:
-                    print(f"[Streaming] {tmdb_id} not found in Streaming Availability API.")
-                    return []
+            title_results = search_response.json().get("title_results", [])
+            if not title_results:
+                print(f"[Streaming] No WatchMode match for tmdb_id={tmdb_id}")
+                return []
 
-                response.raise_for_status()
-                data = response.json()
-                break
+            watchmode_id = title_results[0]["id"]
 
-            except requests.RequestException as exc:
-                last_exc = exc
-                print(f"[Streaming] Request failed for {tmdb_id} (attempt {attempt}/3): {exc}")
-                if attempt < 3:
-                    time.sleep(2)
-        else:
-            print(f"[Streaming] All retries exhausted for {tmdb_id}: {last_exc}")
+            # ---------------------------------------------------------- #
+            # Step 2 — Fetch subscription sources for the WatchMode id   #
+            # ---------------------------------------------------------- #
+            sources_params = {
+                "apiKey": self.api_key,
+                "regions": "US,BR,MX",
+                "types": "sub",  # subscription only, not rent/buy
+            }
+            sources_response = requests.get(
+                f"{BASE_URL}/title/{watchmode_id}/sources/",
+                params=sources_params,
+                timeout=10,
+            )
+
+            if sources_response.status_code != 200:
+                print(
+                    f"[Streaming] Sources failed for watchmode_id={watchmode_id}: "
+                    f"{sources_response.status_code}"
+                )
+                return []
+
+            # Build deduplicated list of canonical names for tracked sources only
+            providers: list[str] = []
+            for source in sources_response.json():
+                source_id = source.get("source_id")
+                name = self.TRACKED_SOURCES.get(source_id)
+                if name and name not in providers:
+                    providers.append(name)
+
+            print(f"[Streaming] tmdb_id={tmdb_id}: {providers}")
+            time.sleep(0.5)
+            return providers
+
+        except Exception as exc:
+            print(f"[Streaming] Error for tmdb_id={tmdb_id}: {exc}")
             return []
-
-        # The API returns streamingInfo keyed by country code
-        streaming_info = data.get("result", {}).get("streamingInfo", {}).get("us", [])
-
-        providers: list[str] = []
-        for entry in streaming_info:
-            # Only include subscription-type access, not rent/buy/free
-            if entry.get("streamingType") != "subscription":
-                continue
-            service = entry.get("service", "")
-            mapped = PROVIDER_MAP.get(service)
-            if mapped and mapped not in providers:
-                providers.append(mapped)
-
-        print(f"[Streaming] {tmdb_id}: {providers if providers else 'no tracked providers'}")
-        return providers

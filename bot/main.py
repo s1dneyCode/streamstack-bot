@@ -29,7 +29,7 @@ def load_env() -> dict[str, str]:
     any are missing.  Failing fast here is preferable to an obscure error deep
     inside an API client.
     """
-    required = ["TMDB_API_KEY", "OMDB_API_KEY", "SUPABASE_URL", "SUPABASE_KEY", "STREAMING_API_KEY"]
+    required = ["TMDB_API_KEY", "OMDB_API_KEY", "SUPABASE_URL", "SUPABASE_KEY", "WATCHMODE_API_KEY"]
     config: dict[str, str] = {}
 
     for key in required:
@@ -62,7 +62,7 @@ def main() -> None:
 
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
     omdb = OmdbClient(api_key=config["OMDB_API_KEY"])
-    streaming = StreamingClient(api_key=config["STREAMING_API_KEY"])
+    streaming = StreamingClient(api_key=config["WATCHMODE_API_KEY"])
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
     # ------------------------------------------------------------------ #
