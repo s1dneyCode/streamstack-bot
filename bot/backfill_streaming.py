@@ -15,13 +15,14 @@ gated to workflow_dispatch so it never runs on the cron schedule.
 import os
 import sys
 import time
+import requests
 
 from .streaming import StreamingClient
 from .supabase_client import SupabaseClient
 
 
 def load_env() -> dict[str, str]:
-    required = ["STREAMING_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
+    required = ["WATCHMODE_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
     config: dict[str, str] = {}
     for key in required:
         value = os.environ.get(key)
@@ -85,8 +86,53 @@ def main() -> None:
     print("[BACKFILL] Starting streaming availability backfill...")
     config = load_env()
 
-    streaming = StreamingClient(api_key=config["STREAMING_API_KEY"])
+    streaming = StreamingClient(api_key=config["WATCHMODE_API_KEY"])
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
+
+    # ------------------------------------------------------------------ #
+    # DEBUG — verify WatchMode source IDs with a known title             #
+    # Remove this block once source IDs are confirmed correct.           #
+    # ------------------------------------------------------------------ #
+    print("[DEBUG] Testing WatchMode API with Breaking Bad (tmdb_id=1396)...")
+
+    search_response = requests.get(
+        f"{streaming.BASE_URL}/search/",
+        params={
+            "apiKey": config["WATCHMODE_API_KEY"],
+            "search_field": "tmdb_id",
+            "search_value": "1396",
+            "types": "tv_series",
+        },
+        timeout=10,
+    )
+    print(f"[DEBUG] Search status: {search_response.status_code}")
+    print(f"[DEBUG] Search response: {search_response.text}")
+
+    search_data = search_response.json()
+    title_results = search_data.get("title_results", [])
+    if title_results:
+        watchmode_id = title_results[0]["id"]
+        print(f"[DEBUG] WatchMode id: {watchmode_id}")
+
+        sources_response = requests.get(
+            f"{streaming.BASE_URL}/title/{watchmode_id}/sources/",
+            params={
+                "apiKey": config["WATCHMODE_API_KEY"],
+                "regions": "US,BR,MX",
+                "types": "sub",
+            },
+            timeout=10,
+        )
+        print(f"[DEBUG] Sources status: {sources_response.status_code}")
+        print(f"[DEBUG] Sources response: {sources_response.text}")
+    else:
+        print("[DEBUG] No title_results returned — check API key or search params.")
+
+    print("[DEBUG] Test complete. Exiting without running backfill.")
+    return
+    # ------------------------------------------------------------------ #
+    # END DEBUG                                                           #
+    # ------------------------------------------------------------------ #
 
     # ------------------------------------------------------------------ #
     # Step 1 — Identify which titles need backfilling                     #
@@ -99,10 +145,6 @@ def main() -> None:
         f"[BACKFILL] {len(pending)} titles need streaming data, "
         f"{len(all_media) - len(pending)} already covered."
     )
-
-    # Debug: test API response shape before processing the full list
-    print("[BACKFILL] Running API debug test...")
-    streaming.test_single_title()
 
     if not pending:
         print("[BACKFILL] Nothing to do. Exiting.")
