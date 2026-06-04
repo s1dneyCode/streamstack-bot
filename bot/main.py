@@ -213,16 +213,16 @@ def main() -> None:
 
         providers = streaming.get_streaming_providers(tmdb_id=tmdb_id, media_type=media_type)
 
-        db.delete_streaming_providers(media_id)
-
         if providers:
+            # Only replace existing data when we have confirmed new results —
+            # prevents wiping providers due to API failures or empty responses
+            db.delete_streaming_providers(media_id)
             db.upsert_streaming_availability(media_id=media_id, providers=providers)
 
         db.update_streaming_last_checked(media_id)
         reverified += 1
 
-        print(f"[BOT] Re-verified {title}: {providers}")
-        time.sleep(0.5)
+        print(f"[BOT] Re-verified {title}: {providers if providers else '(no results — kept existing data)'}")
 
     print(f"[BOT] Re-verification done. {reverified} titles updated.")
 
