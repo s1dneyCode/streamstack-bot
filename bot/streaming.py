@@ -67,15 +67,12 @@ class StreamingClient:
                 "search_value": str(tmdb_id),
                 "types": search_type,
             }
-            search_response = requests.get(
-                f"{BASE_URL}/search/", params=search_params, timeout=10
-            )
+            search_response = self._get(f"{BASE_URL}/search/", params=search_params)
+            if search_response is None:
+                return []
 
             if search_response.status_code != 200:
-                print(
-                    f"[Streaming] Search failed for tmdb_id={tmdb_id}: "
-                    f"{search_response.status_code}"
-                )
+                print(f"[Streaming] Search failed for tmdb_id={tmdb_id}: {search_response.status_code}")
                 return []
 
             title_results = search_response.json().get("title_results", [])
@@ -93,17 +90,14 @@ class StreamingClient:
                 "regions": "US,BR,MX",
                 "types": "sub",  # subscription only, not rent/buy
             }
-            sources_response = requests.get(
-                f"{BASE_URL}/title/{watchmode_id}/sources/",
-                params=sources_params,
-                timeout=10,
+            sources_response = self._get(
+                f"{BASE_URL}/title/{watchmode_id}/sources/", params=sources_params
             )
+            if sources_response is None:
+                return []
 
             if sources_response.status_code != 200:
-                print(
-                    f"[Streaming] Sources failed for watchmode_id={watchmode_id}: "
-                    f"{sources_response.status_code}"
-                )
+                print(f"[Streaming] Sources failed for watchmode_id={watchmode_id}: {sources_response.status_code}")
                 return []
 
             # Build deduplicated list of canonical names for tracked sources only
@@ -115,9 +109,23 @@ class StreamingClient:
                     providers.append(name)
 
             print(f"[Streaming] tmdb_id={tmdb_id}: {providers}")
-            time.sleep(0.5)
+            time.sleep(2)
             return providers
 
         except Exception as exc:
             print(f"[Streaming] Error for tmdb_id={tmdb_id}: {exc}")
             return []
+
+    def _get(self, url: str, params: dict) -> requests.Response | None:
+        """
+        GET request with 429 backoff: waits 10s and retries up to 2 times
+        before giving up and returning None.
+        """
+        for attempt in range(1, 3):
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code != 429:
+                return response
+            print(f"[Streaming] 429 rate limit hit — waiting 10s (attempt {attempt}/2)...")
+            time.sleep(10)
+        print(f"[Streaming] Giving up after 2 retries for {url}")
+        return None
