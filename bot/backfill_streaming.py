@@ -15,9 +15,8 @@ gated to workflow_dispatch so it never runs on the cron schedule.
 import os
 import sys
 import time
-import requests
 
-from .streaming import StreamingClient, BASE_URL
+from .streaming import StreamingClient
 from .supabase_client import SupabaseClient
 
 
@@ -88,51 +87,6 @@ def main() -> None:
 
     streaming = StreamingClient(api_key=config["WATCHMODE_API_KEY"])
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
-
-    # ------------------------------------------------------------------ #
-    # DEBUG — verify WatchMode source IDs with a known title             #
-    # Remove this block once source IDs are confirmed correct.           #
-    # ------------------------------------------------------------------ #
-    print("[DEBUG] Testing WatchMode API with Breaking Bad (tmdb_id=1396)...")
-
-    search_response = requests.get(
-        f"{BASE_URL}/search/",
-        params={
-            "apiKey": config["WATCHMODE_API_KEY"],
-            "search_field": "tmdb_tv_id",
-            "search_value": "1396",
-            "types": "tv_series",
-        },
-        timeout=10,
-    )
-    print(f"[DEBUG] Search status: {search_response.status_code}")
-    print(f"[DEBUG] Search response: {search_response.text}")
-
-    search_data = search_response.json()
-    title_results = search_data.get("title_results", [])
-    if title_results:
-        watchmode_id = title_results[0]["id"]
-        print(f"[DEBUG] WatchMode id: {watchmode_id}")
-
-        sources_response = requests.get(
-            f"{BASE_URL}/title/{watchmode_id}/sources/",
-            params={
-                "apiKey": config["WATCHMODE_API_KEY"],
-                "regions": "US,BR,MX",
-                "types": "sub",
-            },
-            timeout=10,
-        )
-        print(f"[DEBUG] Sources status: {sources_response.status_code}")
-        print(f"[DEBUG] Sources response: {sources_response.text}")
-    else:
-        print("[DEBUG] No title_results returned — check API key or search params.")
-
-    print("[DEBUG] Test complete. Exiting without running backfill.")
-    return
-    # ------------------------------------------------------------------ #
-    # END DEBUG                                                           #
-    # ------------------------------------------------------------------ #
 
     # ------------------------------------------------------------------ #
     # Step 1 — Identify which titles need backfilling                     #
