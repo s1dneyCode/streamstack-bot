@@ -17,7 +17,7 @@ import sys
 import time
 import requests
 
-from .streaming import StreamingClient
+from .streaming import StreamingClient, BASE_URL
 from .supabase_client import SupabaseClient
 
 
@@ -96,7 +96,7 @@ def main() -> None:
     print("[DEBUG] Testing WatchMode API with Breaking Bad (tmdb_id=1396)...")
 
     search_response = requests.get(
-        f"{streaming.BASE_URL}/search/",
+        f"{BASE_URL}/search/",
         params={
             "apiKey": config["WATCHMODE_API_KEY"],
             "search_field": "tmdb_id",
@@ -115,7 +115,7 @@ def main() -> None:
         print(f"[DEBUG] WatchMode id: {watchmode_id}")
 
         sources_response = requests.get(
-            f"{streaming.BASE_URL}/title/{watchmode_id}/sources/",
+            f"{BASE_URL}/title/{watchmode_id}/sources/",
             params={
                 "apiKey": config["WATCHMODE_API_KEY"],
                 "regions": "US,BR,MX",
