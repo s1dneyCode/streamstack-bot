@@ -203,6 +203,37 @@ class SupabaseClient:
         print(f"[Supabase] {len(results)} titles queued for re-verification.")
         return results
 
+    def get_movies_missing_rt_score(self, today: date) -> list[dict]:
+        """
+        Return released movies with no RT score that are due for a retry.
+
+        Conditions:
+          - media_type = 'movie'
+          - rt_score = 0 OR rt_score IS NULL
+          - release_date <= today (already released)
+          - streaming_last_checked IS NULL OR < today - 7 days (retry cap)
+        """
+        today_str        = today.isoformat()
+        seven_days_ago   = (today - timedelta(days=7)).isoformat()
+
+        try:
+            response = (
+                self.client.table("media")
+                .select("id, tmdb_id, title, release_date, imdb_id")
+                .eq("media_type", "movie")
+                .or_("rt_score.eq.0,rt_score.is.null")
+                .lte("release_date", today_str)
+                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .execute()
+            )
+            rows = response.data or []
+        except Exception as exc:
+            print(f"[Supabase] Error fetching movies missing RT score: {exc}")
+            rows = []
+
+        print(f"[Supabase] {len(rows)} released movies with missing RT score queued for retry.")
+        return rows
+
     def get_movies_without_imdb_id(self) -> list[dict]:
         """Return movies where imdb_id IS NULL, for backfilling."""
         rows: list[dict] = []

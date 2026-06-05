@@ -282,6 +282,34 @@ def main() -> None:
     print(f"[BOT] Step 11 done. {rt_updated} RT scores updated.")
 
     # ------------------------------------------------------------------ #
+    # Step 11b — Retry RT scores for released movies with no score        #
+    # ------------------------------------------------------------------ #
+    missing_rt = db.get_movies_missing_rt_score(today)
+    print(f"\n[BOT] Step 11b: Retrying RT scores for {len(missing_rt)} released movies with no score...")
+
+    rt_recovered = 0
+    for item in missing_rt:
+        tmdb_id = item["tmdb_id"]
+        title   = item["title"]
+        year    = extract_year(item.get("release_date"))
+        imdb_id = item.get("imdb_id")
+
+        score = omdb.get_rt_score(title=title, year=year, imdb_id=imdb_id)
+
+        if score is not None:
+            db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
+            db.update_streaming_last_checked(item["id"])
+            print(f"[BOT] Step 11b {title}: found {score}%")
+            rt_recovered += 1
+        else:
+            db.update_streaming_last_checked(item["id"])
+            print(f"[BOT] Step 11b {title}: still not found")
+
+        time.sleep(0.5)
+
+    print(f"[BOT] Step 11b done. {rt_recovered} new RT scores found.")
+
+    # ------------------------------------------------------------------ #
     # Step 12 — Summary                                                    #
     # ------------------------------------------------------------------ #
     print(f"\n[BOT] Done. {total} new titles added, {skipped} skipped (already exist).")
