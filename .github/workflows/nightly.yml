@@ -2,37 +2,19 @@ name: Nightly Bot
 
 on:
   schedule:
-    # 06:00 UTC = 03:00 AM Chile Standard Time (UTC-3)
-    # During Chilean Summer (CLST, UTC-4) this fires at 02:00 AM — acceptable.
     - cron: '0 6 * * *'
-
-  # Allows triggering the workflow manually from the GitHub Actions UI
-  # without waiting for the next scheduled run.  Useful for testing or
-  # backfilling after an outage.
   workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-
     steps:
-      # Check out the repository so the runner has access to bot/ and requirements.txt
       - uses: actions/checkout@v4
-
-      # Set up the exact Python version used during development to avoid
-      # subtle behavioural differences between minor releases
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      # Install pinned dependencies from requirements.txt.
-      # Using pip directly (rather than a virtual-env) is fine inside the
-      # ephemeral GitHub Actions runner — there is no system-wide pollution risk.
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      # Run the bot.  Secrets are injected as environment variables by the
-      # Actions runner; they are never written to disk or echoed in logs.
       - name: Run bot
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -41,26 +23,3 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           WATCHMODE_API_KEY: ${{ secrets.WATCHMODE_API_KEY }}
         run: python -m bot.main
-
-  backfill:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Backfill streaming
-        env:
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          WATCHMODE_API_KEY: ${{ secrets.WATCHMODE_API_KEY }}
-        run: python -m bot.backfill_streaming
