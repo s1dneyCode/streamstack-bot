@@ -110,6 +110,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
                 )
@@ -156,6 +157,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("first_air_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
                 )
@@ -194,6 +196,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
                 )
@@ -232,6 +235,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
                 )
@@ -270,6 +274,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("first_air_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
                 )
@@ -308,12 +313,22 @@ class TmdbClient:
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
                 )
 
         print(f"[TMDB] Collected {len(results)} unique top rated movies.")
         return results
+
+    def get_imdb_id(self, tmdb_id: int, media_type: str) -> str | None:
+        """Return the IMDb ID for a given TMDB title, or None if unavailable."""
+        try:
+            data = self._get(f"/{media_type}/{tmdb_id}/external_ids")
+            return data.get("imdb_id") or None
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch external_ids for {media_type}/{tmdb_id}: {exc}")
+            return None
 
     def get_watch_providers(self, tmdb_id: int, media_type: str) -> list[str]:
         """

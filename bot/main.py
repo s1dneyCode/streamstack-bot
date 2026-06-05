@@ -148,7 +148,7 @@ def main() -> None:
         year = extract_year(item.get("release_date"))
 
         # --- RT score from OMDb (includes built-in 1s sleep) -----------
-        rt_score = omdb.get_rt_score(title=title, year=year)
+        rt_score = omdb.get_rt_score(title=title, year=year, imdb_id=item.get('imdb_id'))
 
         # --- Streaming providers via TMDB watch/providers ---------------
         # Fetched before the upsert so is_streamable_now is set correctly
@@ -172,6 +172,7 @@ def main() -> None:
             # subscription service carries it in the US
             "is_streamable_now": len(providers) > 0,
             "popularity": item.get("popularity", 0.0),
+            "imdb_id": item.get("imdb_id"),
         }
 
         # --- Persist media row to Supabase ------------------------------
@@ -259,21 +260,22 @@ def main() -> None:
         title   = item["title"]
         year    = extract_year(item.get("release_date"))
 
-        score = omdb.get_rt_score(title=title, year=year)
+        current = (
+            db.client.table("media")
+            .select("rt_score, imdb_id")
+            .eq("tmdb_id", tmdb_id)
+            .single()
+            .execute()
+        )
+        current_score = current.data.get("rt_score") if current.data else None
+        imdb_id = current.data.get("imdb_id") if current.data else None
 
-        if score is not None:
-            current = (
-                db.client.table("media")
-                .select("rt_score")
-                .eq("tmdb_id", tmdb_id)
-                .single()
-                .execute()
-            )
-            current_score = current.data.get("rt_score") if current.data else None
-            if score != current_score:
-                db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
-                print(f"[BOT] RT score {title}: {score}%")
-                rt_updated += 1
+        score = omdb.get_rt_score(title=title, year=year, imdb_id=imdb_id)
+
+        if score is not None and score != current_score:
+            db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
+            print(f"[BOT] RT score {title}: {score}%")
+            rt_updated += 1
 
         time.sleep(0.5)
 

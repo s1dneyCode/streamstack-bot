@@ -5,12 +5,12 @@ OMDb aggregates metadata from multiple sources, including Rotten Tomatoes
 critic scores.  We use it solely for that RT score; TMDB is our source of
 truth for everything else.
 
-Free tier is limited to 1 000 requests/day, so we add a 1-second sleep
-between calls to avoid accidentally exhausting the quota in a single run.
+Free tier is limited to 1 000 requests/day.
 
 Reference: https://www.omdbapi.com/
 """
 
+import re
 import time
 import requests
 
@@ -23,61 +23,54 @@ class OmdbClient:
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
 
-    def get_rt_score(self, title: str, year: str | None) -> int | None:
+    def get_rt_score(self, title: str, year: str | None = None, imdb_id: str | None = None) -> int | None:
         """
-        Look up the Rotten Tomatoes critic score for *title* (optionally
-        filtered by *year* to reduce false-positive matches on remakes).
-
-        OMDb returns a `Ratings` array where each element has `Source` and
-        `Value` fields.  The Rotten Tomatoes entry looks like:
-            {"Source": "Rotten Tomatoes", "Value": "88%"}
-
-        We strip the "%" suffix and return the integer so callers can store
-        it as a plain number.
-
-        Returns None when:
-        - The OMDb API returns an error ("Response": "False")
-        - No Rotten Tomatoes entry exists in the Ratings array
-        - The request itself fails for any reason
+        Attempts to find the RT score using multiple search strategies in order:
+        1. By IMDb ID (most precise)
+        2. By exact title + year
+        3. By title without year
+        4. By simplified title (removes subtitles, leading articles, possessives)
+        Returns score as int (e.g. 88) or None if not found in any strategy.
         """
-        print(f"[OMDb] Fetching RT score for {title} ({year})...")
+        strategies: list[tuple[dict, str]] = []
 
-        params: dict = {"t": title, "apikey": self.api_key}
+        if imdb_id:
+            strategies.append(({'i': imdb_id}, 'IMDb ID'))
+
         if year:
-            # Providing the year narrows the match and reduces wrong-film hits
-            params["y"] = year
+            strategies.append(({'t': title, 'y': year}, 'title + year'))
 
-        try:
-            response = requests.get(OMDB_BASE, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as exc:
-            print(f"[OMDb] Request failed for '{title}': {exc}")
-            # Honour the rate-limit sleep even on failure so we don't hammer
-            # the endpoint with rapid retries during a flaky network period
-            time.sleep(1)
-            return None
+        strategies.append(({'t': title}, 'title'))
 
-        # OMDb signals errors in the JSON body rather than via HTTP status
-        if data.get("Response") == "False":
-            print(f"[OMDb] No results for '{title}': {data.get('Error')}")
-            time.sleep(1)
-            return None
+        simplified = self._simplify_title(title)
+        if simplified != title:
+            if year:
+                strategies.append(({'t': simplified, 'y': year}, 'simplified title + year'))
+            strategies.append(({'t': simplified}, 'simplified title'))
 
-        # Walk the Ratings array looking for the Rotten Tomatoes source
-        for rating in data.get("Ratings", []):
-            if rating.get("Source") == "Rotten Tomatoes":
-                raw_value = rating.get("Value", "")
-                # Strip the trailing "%" and convert to int (e.g. "88%" → 88)
-                try:
-                    score = int(raw_value.replace("%", "").strip())
-                    print(f"[OMDb] RT score for '{title}': {score}%")
-                    time.sleep(1)
-                    return score
-                except ValueError:
-                    print(f"[OMDb] Could not parse RT value '{raw_value}' for '{title}'")
-                    break
+        for params, strategy_name in strategies:
+            params['apikey'] = self.api_key
+            try:
+                response = requests.get(OMDB_BASE, params=params, timeout=10)
+                data = response.json()
+                if data.get('Response') == 'True':
+                    for rating in data.get('Ratings', []):
+                        if rating.get('Source') == 'Rotten Tomatoes':
+                            value = rating.get('Value', '')
+                            if value and value != 'N/A':
+                                score = int(value.replace('%', ''))
+                                print(f"[OMDb] Found RT score for '{title}' via {strategy_name}: {score}%")
+                                return score
+            except Exception:
+                pass
+            time.sleep(0.3)
 
-        print(f"[OMDb] No Rotten Tomatoes rating found for '{title}'")
-        time.sleep(1)
+        print(f"[OMDb] No RT score found for '{title}' after all strategies.")
         return None
+
+    def _simplify_title(self, title: str) -> str:
+        """Removes possessives, subtitles after ':', and leading articles."""
+        simplified = re.sub(r"^[\w\s]+'s\s+", '', title)
+        simplified = re.sub(r'[\:\-].*$', '', simplified).strip()
+        simplified = re.sub(r'^(The|A|An)\s+', '', simplified, flags=re.IGNORECASE)
+        return simplified.strip()

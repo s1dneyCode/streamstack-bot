@@ -62,7 +62,7 @@ class SupabaseClient:
         print(f"[Supabase] Upserting media: {media_dict.get('title')} (tmdb_id={media_dict.get('tmdb_id')})")
 
         try:
-            upsert_payload = {**media_dict, "popularity": media_dict.get("popularity", 0.0), "tmdb_score": media_dict.get("tmdb_score", 0)}
+            upsert_payload = {**media_dict, "popularity": media_dict.get("popularity", 0.0), "tmdb_score": media_dict.get("tmdb_score", 0), "imdb_id": media_dict.get("imdb_id", None)}
             self.client.table("media").upsert(upsert_payload, on_conflict="tmdb_id").execute()
 
             # Fetch the row id in a separate query — chaining .select() after
@@ -202,6 +202,35 @@ class SupabaseClient:
 
         print(f"[Supabase] {len(results)} titles queued for re-verification.")
         return results
+
+    def get_movies_without_imdb_id(self) -> list[dict]:
+        """Return movies where imdb_id IS NULL, for backfilling."""
+        rows: list[dict] = []
+        page_size = 1000
+        offset = 0
+
+        while True:
+            try:
+                response = (
+                    self.client.table("media")
+                    .select("id, tmdb_id, title")
+                    .eq("media_type", "movie")
+                    .is_("imdb_id", "null")
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+            except Exception as exc:
+                print(f"[Supabase] Error fetching movies without imdb_id: {exc}")
+                break
+
+            batch = response.data or []
+            rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
+        print(f"[Supabase] Found {len(rows)} movies without imdb_id.")
+        return rows
 
     def get_existing_tmdb_ids(self) -> set[int]:
         """
