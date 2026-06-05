@@ -10,6 +10,7 @@ on:
         options:
           - streaming
           - popularity
+          - tmdb-scores
 
 jobs:
   backfill-streaming:
@@ -46,3 +47,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_popularity
+
+  backfill-tmdb-scores:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.job == 'tmdb-scores'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill TMDb scores
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_tmdb_scores
