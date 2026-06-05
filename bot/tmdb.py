@@ -109,6 +109,7 @@ class TmdbClient:
                         "media_type": "movie",
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
+                        "popularity": item.get("popularity", 0.0),
                     }
                 )
 
@@ -153,6 +154,7 @@ class TmdbClient:
                         "media_type": "tv",
                         "release_date": format_date(item.get("first_air_date")),
                         "vote_average": item.get("vote_average", 0.0),
+                        "popularity": item.get("popularity", 0.0),
                     }
                 )
 
@@ -189,6 +191,7 @@ class TmdbClient:
                         "media_type": "movie",
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
+                        "popularity": item.get("popularity", 0.0),
                     }
                 )
 
@@ -225,6 +228,7 @@ class TmdbClient:
                         "media_type": "movie",
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
+                        "popularity": item.get("popularity", 0.0),
                     }
                 )
 
@@ -261,6 +265,7 @@ class TmdbClient:
                         "media_type": "tv",
                         "release_date": format_date(item.get("first_air_date")),
                         "vote_average": item.get("vote_average", 0.0),
+                        "popularity": item.get("popularity", 0.0),
                     }
                 )
 
@@ -297,6 +302,7 @@ class TmdbClient:
                         "media_type": "movie",
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
+                        "popularity": item.get("popularity", 0.0),
                     }
                 )
 

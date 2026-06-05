@@ -171,6 +171,7 @@ def main() -> None:
             # A title is considered "streamable now" if at least one
             # subscription service carries it in the US
             "is_streamable_now": len(providers) > 0,
+            "popularity": item.get("popularity", 0.0),
         }
 
         # --- Persist media row to Supabase ------------------------------
@@ -225,6 +226,26 @@ def main() -> None:
         print(f"[BOT] Re-verified {title}: {providers if providers else '(no results — kept existing data)'}")
 
     print(f"[BOT] Re-verification done. {reverified} titles updated.")
+
+    # ------------------------------------------------------------------ #
+    # Step 10b — Update popularity for titles due for re-verification      #
+    # ------------------------------------------------------------------ #
+    print(f"\n[BOT] Step 10b: Updating popularity for {len(reverify_list)} titles...")
+
+    for item in reverify_list:
+        tmdb_id    = item["tmdb_id"]
+        title      = item["title"]
+        media_type = item["media_type"]
+
+        try:
+            detail = tmdb._get(f"/{media_type}/{tmdb_id}")
+            popularity = detail.get("popularity", 0.0)
+            db.client.table("media").update({"popularity": popularity}).eq("tmdb_id", tmdb_id).execute()
+            print(f"[BOT] Updated popularity for {title}: {popularity}")
+        except Exception as exc:
+            print(f"[BOT] Failed to update popularity for {title}: {exc}")
+
+        time.sleep(0.3)
 
     # ------------------------------------------------------------------ #
     # Step 11 — Summary                                                    #
