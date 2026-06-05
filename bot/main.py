@@ -248,7 +248,39 @@ def main() -> None:
         time.sleep(0.3)
 
     # ------------------------------------------------------------------ #
-    # Step 11 — Summary                                                    #
+    # Step 11 — Update RT scores for movies due for re-verification       #
+    # ------------------------------------------------------------------ #
+    movies_to_update = [item for item in reverify_list if item["media_type"] == "movie"]
+    print(f"\n[BOT] Step 11: Updating RT scores for {len(movies_to_update)} movies...")
+
+    rt_updated = 0
+    for item in movies_to_update:
+        tmdb_id = item["tmdb_id"]
+        title   = item["title"]
+        year    = extract_year(item.get("release_date"))
+
+        score = omdb.get_rt_score(title=title, year=year)
+
+        if score is not None:
+            current = (
+                db.client.table("media")
+                .select("rt_score")
+                .eq("tmdb_id", tmdb_id)
+                .single()
+                .execute()
+            )
+            current_score = current.data.get("rt_score") if current.data else None
+            if score != current_score:
+                db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
+                print(f"[BOT] RT score {title}: {score}%")
+                rt_updated += 1
+
+        time.sleep(0.5)
+
+    print(f"[BOT] Step 11 done. {rt_updated} RT scores updated.")
+
+    # ------------------------------------------------------------------ #
+    # Step 12 — Summary                                                    #
     # ------------------------------------------------------------------ #
     print(f"\n[BOT] Done. {total} new titles added, {skipped} skipped (already exist).")
 
