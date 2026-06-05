@@ -12,6 +12,7 @@ on:
           - popularity
           - tmdb-scores
           - rt-scores
+          - imdb-ids
 
 jobs:
   backfill-streaming:
@@ -83,3 +84,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_rt_scores
+
+  backfill-imdb-ids:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.job == 'imdb-ids'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill IMDb IDs
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_imdb_ids
