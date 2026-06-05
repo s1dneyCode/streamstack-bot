@@ -62,7 +62,7 @@ class SupabaseClient:
         print(f"[Supabase] Upserting media: {media_dict.get('title')} (tmdb_id={media_dict.get('tmdb_id')})")
 
         try:
-            upsert_payload = {**media_dict, "popularity": media_dict.get("popularity", 0.0)}
+            upsert_payload = {**media_dict, "popularity": media_dict.get("popularity", 0.0), "tmdb_score": media_dict.get("tmdb_score", 0)}
             self.client.table("media").upsert(upsert_payload, on_conflict="tmdb_id").execute()
 
             # Fetch the row id in a separate query — chaining .select() after
