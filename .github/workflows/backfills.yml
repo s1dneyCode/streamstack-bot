@@ -13,6 +13,7 @@ on:
           - tmdb-scores
           - rt-scores
           - imdb-ids
+          - migrate-images
 
 jobs:
   backfill-streaming:
@@ -101,3 +102,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_imdb_ids
+
+  migrate-images:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.job == 'migrate-images'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Migrate images
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.migrate_images

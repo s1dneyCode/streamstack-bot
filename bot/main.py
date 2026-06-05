@@ -23,6 +23,7 @@ from .tmdb import TmdbClient
 from .omdb import OmdbClient
 from .streaming import StreamingClient
 from .supabase_client import SupabaseClient
+from .migrate_images import migrate_poster, migrate_carousel
 
 
 def load_env() -> dict[str, str]:
@@ -194,6 +195,13 @@ def main() -> None:
 
         if providers and media_uuid:
             db.upsert_streaming_availability(media_id=media_uuid, providers=providers)
+
+        # --- Image migration: poster and carousel -----------------------
+        try:
+            migrate_poster(db, tmdb_id, title, item.get("poster_path", ""))
+            migrate_carousel(db, tmdb, tmdb_id, title, media_type)
+        except Exception as exc:
+            print(f"[BOT] Image migration failed for {title}: {exc}")
 
         # --- Progress log -----------------------------------------------
         score_str = f"{rt_score}%" if rt_score is not None else "N/A"

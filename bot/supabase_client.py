@@ -131,6 +131,23 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error updating streaming_last_checked for media_id={media_id}: {exc}")
 
+    def upload_image(self, bucket: str, path: str, image_bytes: bytes, content_type: str = "image/jpeg") -> str | None:
+        """Upload image_bytes to Supabase Storage and return the public URL, or None on failure."""
+        try:
+            self.client.storage.from_(bucket).upload(
+                path=path,
+                file=image_bytes,
+                file_options={"content-type": content_type, "upsert": "true"},
+            )
+            return self.get_public_url(bucket, path)
+        except Exception as exc:
+            print(f"[Supabase] Error uploading image to {bucket}/{path}: {exc}")
+            return None
+
+    def get_public_url(self, bucket: str, path: str) -> str:
+        """Return the public URL for a file stored in Supabase Storage."""
+        return self.client.storage.from_(bucket).get_public_url(path)
+
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
