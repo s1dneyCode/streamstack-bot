@@ -156,15 +156,21 @@ class SupabaseClient:
         """
         Return titles whose streaming availability should be re-checked today.
 
-        Five categories with different re-check frequencies:
+        Movie / general categories:
           - Coming Soon          (release_date > today)              — every 7 days or never checked
           - In Theatres recent   (in theatres, released ≤ 60d ago)   — every 7 days
           - In Theatres old      (in theatres, released > 60d ago)   — every 30 days
           - Streamable           (is_streamable_now = true)          — every 30 days
           - Old titles           (released > 365d ago)               — every 90 days
+
+        TV-specific categories (no providers yet):
+          - TV released ≤ 30 days ago, not streamable               — every 3 days
+          - TV released 30-90 days ago, not streamable              — every 7 days
+          - TV released > 90 days ago, not streamable               — every 30 days
         """
         cols = "id, tmdb_id, title, media_type, release_date, is_in_theatres"
         today_str        = today.isoformat()
+        three_days_ago   = (today - timedelta(days=3)).isoformat()
         seven_days_ago   = (today - timedelta(days=7)).isoformat()
         thirty_days_ago  = (today - timedelta(days=30)).isoformat()
         sixty_days_ago   = (today - timedelta(days=60)).isoformat()
@@ -214,11 +220,96 @@ class SupabaseClient:
                 .lt("streaming_last_checked", ninety_days_ago)
                 .execute()).data or [])
 
+            # TV: released in last 30 days, not yet streamable — stale after 3 days
+            _add((self.client.table("media").select(cols)
+                .eq("media_type", "tv")
+                .eq("is_streamable_now", False)
+                .lte("release_date", today_str)
+                .gte("release_date", thirty_days_ago)
+                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{three_days_ago}")
+                .execute()).data or [])
+
+            # TV: released 30-90 days ago, not yet streamable — stale after 7 days
+            _add((self.client.table("media").select(cols)
+                .eq("media_type", "tv")
+                .eq("is_streamable_now", False)
+                .lt("release_date", thirty_days_ago)
+                .gte("release_date", ninety_days_ago)
+                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .execute()).data or [])
+
+            # TV: older than 90 days, not yet streamable — stale after 30 days
+            _add((self.client.table("media").select(cols)
+                .eq("media_type", "tv")
+                .eq("is_streamable_now", False)
+                .lt("release_date", ninety_days_ago)
+                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{thirty_days_ago}")
+                .execute()).data or [])
+
         except Exception as exc:
             print(f"[Supabase] Error fetching titles to reverify: {exc}")
 
         print(f"[Supabase] {len(results)} titles queued for re-verification.")
         return results
+
+    def get_movies_to_update_theatres(self, today: date) -> list[dict]:
+        """
+        Return released movies with no theatrical or streaming status set yet.
+
+        These are movies whose release_date has passed but are neither marked
+        in-theatres nor streamable — they are assumed to be in cinemas.
+        TV shows are excluded; is_in_theatres is never set for them.
+        """
+        today_str = today.isoformat()
+        try:
+            response = (
+                self.client.table("media")
+                .select("id, tmdb_id, title, media_type")
+                .eq("media_type", "movie")
+                .lte("release_date", today_str)
+                .eq("is_in_theatres", False)
+                .eq("is_streamable_now", False)
+                .execute()
+            )
+            rows = response.data or []
+        except Exception as exc:
+            print(f"[Supabase] Error fetching movies to update theatres: {exc}")
+            rows = []
+
+        print(f"[Supabase] {len(rows)} movies to mark as in theatres.")
+        return rows
+
+    def get_titles_leaving_theatres(self) -> list[dict]:
+        """
+        Return titles that are marked in-theatres but now have streaming availability.
+
+        Uses an inner join so only titles with at least one streaming_availability
+        row are returned.
+        """
+        try:
+            response = (
+                self.client.table("media")
+                .select("id, tmdb_id, title, media_type, streaming_availability(media_id)")
+                .eq("is_in_theatres", True)
+                .execute()
+            )
+            rows = [row for row in (response.data or []) if row.get("streaming_availability")]
+        except Exception as exc:
+            print(f"[Supabase] Error fetching titles leaving theatres: {exc}")
+            rows = []
+
+        print(f"[Supabase] {len(rows)} titles moving from theatres to streaming.")
+        return rows
+
+    def update_theatres_status(self, media_id: int, is_in_theatres: bool, is_streamable_now: bool) -> None:
+        """Update is_in_theatres and is_streamable_now for a media row."""
+        try:
+            self.client.table("media").update({
+                "is_in_theatres": is_in_theatres,
+                "is_streamable_now": is_streamable_now,
+            }).eq("id", media_id).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error updating theatre status for media_id={media_id}: {exc}")
 
     def get_movies_missing_rt_score(self, today: date) -> list[dict]:
         """

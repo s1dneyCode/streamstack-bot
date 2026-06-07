@@ -326,6 +326,28 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print(f"\n[BOT] Done. {total} new titles added, {skipped} skipped (already exist).")
 
+    # ------------------------------------------------------------------ #
+    # Step 13 — Update theatrical/streaming states                        #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 13: Updating theatrical and streaming states...")
+
+    theatres_count = 0
+    streaming_count = 0
+
+    movies_for_theatres = db.get_movies_to_update_theatres(today)
+    for item in movies_for_theatres:
+        db.update_theatres_status(item["id"], is_in_theatres=True, is_streamable_now=False)
+        print(f"[BOT] Step 13 {item['title']}: marked as IN THEATRES")
+        theatres_count += 1
+
+    titles_leaving = db.get_titles_leaving_theatres()
+    for item in titles_leaving:
+        db.update_theatres_status(item["id"], is_in_theatres=False, is_streamable_now=True)
+        print(f"[BOT] Step 13 {item['title']}: moved from IN THEATRES to STREAMING")
+        streaming_count += 1
+
+    print(f"[BOT] Step 13 done. {theatres_count} movies marked in theatres, {streaming_count} titles moved to streaming.")
+
 
 if __name__ == "__main__":
     main()
