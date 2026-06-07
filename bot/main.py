@@ -68,46 +68,50 @@ def main() -> None:
     streaming = StreamingClient(api_key=config["WATCHMODE_API_KEY"])
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
+    print("[BOT] Fetching genre maps from TMDB...")
+    movie_genre_map = tmdb.get_genre_map('movie')
+    tv_genre_map    = tmdb.get_genre_map('tv')
+
     # ------------------------------------------------------------------ #
     # Step 1 — Fetch now-playing movies from TMDB                         #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 1: Fetching now-playing movies from TMDB...")
-    now_playing = tmdb.get_now_playing_movies(pages=3)
+    now_playing = tmdb.get_now_playing_movies(pages=3, genre_map=movie_genre_map)
     print(f"[BOT] Fetched {len(now_playing)} now-playing movies.")
 
     # ------------------------------------------------------------------ #
     # Step 2 — Fetch on-air TV shows from TMDB                            #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 2: Fetching on-air TV shows from TMDB...")
-    on_air = tmdb.get_on_air_tv(pages=3)
+    on_air = tmdb.get_on_air_tv(pages=3, genre_map=tv_genre_map)
     print(f"[BOT] Fetched {len(on_air)} on-air TV shows.")
 
     # ------------------------------------------------------------------ #
     # Step 3 — Fetch upcoming movies from TMDB                            #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 3: Fetching upcoming movies from TMDB...")
-    upcoming = tmdb.get_upcoming_movies(pages=3)
+    upcoming = tmdb.get_upcoming_movies(pages=3, genre_map=movie_genre_map)
     print(f"[BOT] Fetched {len(upcoming)} upcoming movies.")
 
     # ------------------------------------------------------------------ #
     # Step 4 — Fetch popular movies from TMDB                             #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 4: Fetching popular movies from TMDB...")
-    popular_movies = tmdb.get_popular_movies(pages=3)
+    popular_movies = tmdb.get_popular_movies(pages=3, genre_map=movie_genre_map)
     print(f"[BOT] Fetched {len(popular_movies)} popular movies.")
 
     # ------------------------------------------------------------------ #
     # Step 5 — Fetch popular TV shows from TMDB                           #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 5: Fetching popular TV shows from TMDB...")
-    popular_tv = tmdb.get_popular_tv(pages=3)
+    popular_tv = tmdb.get_popular_tv(pages=3, genre_map=tv_genre_map)
     print(f"[BOT] Fetched {len(popular_tv)} popular TV shows.")
 
     # ------------------------------------------------------------------ #
     # Step 6 — Fetch top-rated movies from TMDB                           #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 6: Fetching top-rated movies from TMDB...")
-    top_rated = tmdb.get_top_rated_movies(pages=2)
+    top_rated = tmdb.get_top_rated_movies(pages=2, genre_map=movie_genre_map)
     print(f"[BOT] Fetched {len(top_rated)} top-rated movies.")
 
     # ------------------------------------------------------------------ #

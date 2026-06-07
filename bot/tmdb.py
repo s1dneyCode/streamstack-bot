@@ -25,6 +25,7 @@ class TmdbClient:
     def __init__(self, api_key: str) -> None:
         # The API key is passed as a query parameter on every request
         self.api_key = api_key
+        self._genre_cache: dict[str, dict[int, str]] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -63,7 +64,24 @@ class TmdbClient:
     # Public methods
     # ------------------------------------------------------------------
 
-    def get_now_playing_movies(self, pages: int = 3) -> list[dict]:
+    def get_genre_map(self, media_type: str) -> dict[int, str]:
+        """Return a genre_id → genre_name mapping for movie or tv. Cached per instance."""
+        if media_type in self._genre_cache:
+            return self._genre_cache[media_type]
+
+        endpoint = "/genre/movie/list" if media_type == "movie" else "/genre/tv/list"
+        try:
+            data = self._get(endpoint, params={"language": "en-US"})
+            genre_map = {g["id"]: g["name"] for g in data.get("genres", [])}
+        except Exception as exc:
+            print(f"[TMDB] Failed to fetch genre map for {media_type}: {exc}")
+            genre_map = {}
+
+        self._genre_cache[media_type] = genre_map
+        print(f"[TMDB] Loaded {len(genre_map)} genres for {media_type}.")
+        return genre_map
+
+    def get_now_playing_movies(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
         """
         Fetch movies currently playing in US cinemas.
 
@@ -80,6 +98,7 @@ class TmdbClient:
             release_date  str (YYYY-MM-DD) or None
             vote_average  float
         """
+        genre_map = genre_map or {}
         seen_ids: set[int] = set()
         results: list[dict] = []
 
@@ -100,6 +119,9 @@ class TmdbClient:
                 raw_poster = item.get("poster_path") or ""
                 poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
 
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
                 results.append(
                     {
                         "tmdb_id": tmdb_id,
@@ -110,6 +132,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
@@ -118,7 +141,7 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique movies.")
         return results
 
-    def get_on_air_tv(self, pages: int = 3) -> list[dict]:
+    def get_on_air_tv(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
         """
         Fetch TV shows currently airing (within the next 7 days per TMDB).
 
@@ -128,6 +151,7 @@ class TmdbClient:
 
         Returns the same normalised dict shape with media_type='tv'.
         """
+        genre_map = genre_map or {}
         seen_ids: set[int] = set()
         results: list[dict] = []
 
@@ -147,6 +171,9 @@ class TmdbClient:
                 raw_poster = item.get("poster_path") or ""
                 poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
 
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
                 results.append(
                     {
                         "tmdb_id": tmdb_id,
@@ -157,6 +184,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("first_air_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
@@ -165,8 +193,9 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique TV shows.")
         return results
 
-    def get_upcoming_movies(self, pages: int = 3) -> list[dict]:
+    def get_upcoming_movies(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
         """Fetch movies with a US release date in the near future."""
+        genre_map = genre_map or {}
         seen_ids: set[int] = set()
         results: list[dict] = []
 
@@ -186,6 +215,9 @@ class TmdbClient:
                 raw_poster = item.get("poster_path") or ""
                 poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
 
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
                 results.append(
                     {
                         "tmdb_id": tmdb_id,
@@ -196,6 +228,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
@@ -204,8 +237,9 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique upcoming movies.")
         return results
 
-    def get_popular_movies(self, pages: int = 3) -> list[dict]:
+    def get_popular_movies(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
         """Fetch the most-viewed movies on TMDB right now."""
+        genre_map = genre_map or {}
         seen_ids: set[int] = set()
         results: list[dict] = []
 
@@ -225,6 +259,9 @@ class TmdbClient:
                 raw_poster = item.get("poster_path") or ""
                 poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
 
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
                 results.append(
                     {
                         "tmdb_id": tmdb_id,
@@ -235,6 +272,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
@@ -243,8 +281,9 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique popular movies.")
         return results
 
-    def get_popular_tv(self, pages: int = 3) -> list[dict]:
+    def get_popular_tv(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
         """Fetch the most-viewed TV shows on TMDB right now."""
+        genre_map = genre_map or {}
         seen_ids: set[int] = set()
         results: list[dict] = []
 
@@ -264,6 +303,9 @@ class TmdbClient:
                 raw_poster = item.get("poster_path") or ""
                 poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
 
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
                 results.append(
                     {
                         "tmdb_id": tmdb_id,
@@ -274,6 +316,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("first_air_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
@@ -282,8 +325,9 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique popular TV shows.")
         return results
 
-    def get_top_rated_movies(self, pages: int = 2) -> list[dict]:
+    def get_top_rated_movies(self, pages: int = 2, genre_map: dict[int, str] | None = None) -> list[dict]:
         """Fetch highest-rated movies on TMDB."""
+        genre_map = genre_map or {}
         seen_ids: set[int] = set()
         results: list[dict] = []
 
@@ -303,6 +347,9 @@ class TmdbClient:
                 raw_poster = item.get("poster_path") or ""
                 poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
 
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
                 results.append(
                     {
                         "tmdb_id": tmdb_id,
@@ -313,6 +360,7 @@ class TmdbClient:
                         "release_date": format_date(item.get("release_date")),
                         "vote_average": item.get("vote_average", 0.0),
                         "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                     }
