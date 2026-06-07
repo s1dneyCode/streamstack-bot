@@ -14,7 +14,7 @@ Run via:
 
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 from supabase import create_client
 
@@ -39,19 +39,19 @@ def state_label(is_in_theatres: bool, is_streamable_now: bool) -> str:
     return "neither"
 
 
-def compute_state(row: dict, streaming_ids: set[int], today_str: str) -> tuple[bool, bool]:
+def compute_state(row: dict, streaming_ids: set[int], today_str: str, ninety_days_ago_str: str) -> tuple[bool, bool]:
     """Return the correct (is_in_theatres, is_streamable_now) for a media row."""
-    media_id   = row["id"]
-    media_type = row["media_type"]
+    media_id     = row["id"]
+    media_type   = row["media_type"]
     release_date = row.get("release_date") or ""
 
-    has_providers = media_id in streaming_ids
-    released      = bool(release_date) and release_date <= today_str
+    has_providers     = media_id in streaming_ids
+    recently_released = bool(release_date) and ninety_days_ago_str <= release_date <= today_str
 
     if has_providers:
         return False, True
 
-    if media_type == "movie" and released:
+    if media_type == "movie" and recently_released:
         return True, False
 
     return False, False
@@ -81,7 +81,9 @@ def main() -> None:
     config = load_env()
     db = create_client(config["SUPABASE_URL"], config["SUPABASE_KEY"])
 
-    today_str = date.today().isoformat()
+    today              = date.today()
+    today_str          = today.isoformat()
+    ninety_days_ago_str = (today - timedelta(days=90)).isoformat()
 
     # Fetch all distinct media_ids that have at least one streaming provider
     print("[STATES] Fetching streaming_availability...")
@@ -104,7 +106,7 @@ def main() -> None:
     for i, row in enumerate(media_rows, start=1):
         old_in_theatres  = row["is_in_theatres"]
         old_streamable   = row["is_streamable_now"]
-        new_in_theatres, new_streamable = compute_state(row, streaming_ids, today_str)
+        new_in_theatres, new_streamable = compute_state(row, streaming_ids, today_str, ninety_days_ago_str)
 
         old_label = state_label(old_in_theatres, old_streamable)
         new_label = state_label(new_in_theatres, new_streamable)

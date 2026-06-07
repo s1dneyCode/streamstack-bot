@@ -254,19 +254,21 @@ class SupabaseClient:
 
     def get_movies_to_update_theatres(self, today: date) -> list[dict]:
         """
-        Return released movies with no theatrical or streaming status set yet.
+        Return recently released movies with no theatrical or streaming status set yet.
 
-        These are movies whose release_date has passed but are neither marked
-        in-theatres nor streamable — they are assumed to be in cinemas.
+        Only movies released within the last 90 days are considered in-theatres.
+        Older movies with no providers are left in a neutral state (both false).
         TV shows are excluded; is_in_theatres is never set for them.
         """
-        today_str = today.isoformat()
+        today_str          = today.isoformat()
+        ninety_days_ago    = (today - timedelta(days=90)).isoformat()
         try:
             response = (
                 self.client.table("media")
                 .select("id, tmdb_id, title, media_type")
                 .eq("media_type", "movie")
                 .lte("release_date", today_str)
+                .gte("release_date", ninety_days_ago)
                 .eq("is_in_theatres", False)
                 .eq("is_streamable_now", False)
                 .execute()
