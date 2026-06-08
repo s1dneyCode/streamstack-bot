@@ -131,6 +131,40 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error updating streaming_last_checked for media_id={media_id}: {exc}")
 
+    def upsert_trailers(self, media_id: int, trailers: list[dict]) -> int:
+        """
+        Upsert trailer rows into media_trailers for the given media row.
+        Conflict key: (media_id, youtube_key). Returns the number of rows upserted.
+        """
+        if not trailers:
+            return 0
+
+        rows = [
+            {
+                "media_id":     media_id,
+                "youtube_key":  v["key"],
+                "name":         v.get("name", ""),
+                "type":         v.get("type", ""),
+                "published_at": v.get("published_at"),
+            }
+            for v in trailers
+            if v.get("key")
+        ]
+
+        if not rows:
+            return 0
+
+        try:
+            self.client.table("media_trailers").upsert(
+                rows,
+                on_conflict="media_id,youtube_key",
+            ).execute()
+            print(f"[Supabase] Upserted {len(rows)} trailer(s) for media_id={media_id}.")
+            return len(rows)
+        except Exception as exc:
+            print(f"[Supabase] Error upserting trailers for media_id={media_id}: {exc}")
+            return 0
+
     def upload_image(self, bucket: str, path: str, image_bytes: bytes, content_type: str = "image/jpeg") -> str | None:
         """Upload image_bytes to Supabase Storage and return the public URL, or None on failure."""
         try:

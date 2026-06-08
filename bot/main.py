@@ -348,6 +348,44 @@ def main() -> None:
 
     print(f"[BOT] Step 13 done. {theatres_count} movies marked in theatres, {streaming_count} titles moved to streaming.")
 
+    # ------------------------------------------------------------------ #
+    # Step 14 — Fetch and store trailers for titles with none             #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 14: Fetching trailers for titles with no trailers...")
+
+    trailer_media_ids: set[int] = {
+        row["media_id"]
+        for row in (db.client.table("media_trailers").select("media_id").execute().data or [])
+    }
+
+    page_size = 1000
+    offset = 0
+    all_titles: list[dict] = []
+    while True:
+        batch = (
+            db.client.table("media")
+            .select("id, tmdb_id, title, media_type")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data or []
+        )
+        all_titles.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    needs_trailers = [t for t in all_titles if t["id"] not in trailer_media_ids][:50]
+
+    step14_trailers = 0
+    for item in needs_trailers:
+        videos = tmdb.get_videos(tmdb_id=item["tmdb_id"], media_type=item["media_type"])
+        count  = db.upsert_trailers(media_id=item["id"], trailers=videos)
+        step14_trailers += count
+        print(f"[BOT] Step 14 {item['title']}: {count} trailer(s) added")
+        time.sleep(0.25)
+
+    print(f"[BOT] Step 14 done. {len(needs_trailers)} titles processed, {step14_trailers} trailers added.")
+
 
 if __name__ == "__main__":
     main()

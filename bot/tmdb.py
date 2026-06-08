@@ -369,6 +369,21 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique top rated movies.")
         return results
 
+    def get_videos(self, tmdb_id: int, media_type: str) -> list[dict]:
+        """Return official YouTube trailers and teasers for a title from TMDB."""
+        try:
+            data = self._get(f"/{media_type}/{tmdb_id}/videos")
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch videos for {media_type}/{tmdb_id}: {exc}")
+            return []
+
+        return [
+            v for v in data.get("results", [])
+            if v.get("official")
+            and v.get("site") == "YouTube"
+            and v.get("type") in ("Trailer", "Teaser")
+        ]
+
     def get_imdb_id(self, tmdb_id: int, media_type: str) -> str | None:
         """Return the IMDb ID for a given TMDB title, or None if unavailable."""
         try:
