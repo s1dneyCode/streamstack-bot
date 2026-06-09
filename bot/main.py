@@ -386,6 +386,48 @@ def main() -> None:
 
     print(f"[BOT] Step 14 done. {len(needs_trailers)} titles processed, {step14_trailers} trailers added.")
 
+    # ------------------------------------------------------------------ #
+    # Step 15 — Fetch and store credits for titles with none              #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 15: Fetching credits for titles with no credits...")
+
+    credit_media_ids: set[str] = {
+        row["media_id"]
+        for row in (db.client.table("media_credits").select("media_id").execute().data or [])
+    }
+
+    offset = 0
+    all_titles_for_credits: list[dict] = []
+    while True:
+        batch = (
+            db.client.table("media")
+            .select("id, tmdb_id, title, media_type")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data or []
+        )
+        all_titles_for_credits.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    needs_credits = [t for t in all_titles_for_credits if t["id"] not in credit_media_ids][:50]
+
+    step15_credits = 0
+    for item in needs_credits:
+        result = tmdb.get_credits(tmdb_id=item["tmdb_id"], media_type=item["media_type"])
+        count = db.upsert_credits(
+            media_id=item["id"],
+            directors=result["directors"],
+            writers=result["writers"],
+            cast=result["cast"],
+        )
+        step15_credits += count
+        print(f"[BOT] Step 15 {item['title']}: {count} credit(s) added")
+        time.sleep(0.25)
+
+    print(f"[BOT] Step 15 done. {len(needs_credits)} titles processed, {step15_credits} credits inserted.")
+
 
 if __name__ == "__main__":
     main()

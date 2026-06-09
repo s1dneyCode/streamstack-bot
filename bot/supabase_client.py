@@ -131,6 +131,42 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error updating streaming_last_checked for media_id={media_id}: {exc}")
 
+    def upsert_credits(
+        self,
+        media_id: str,
+        directors: list[dict],
+        writers: list[dict],
+        cast: list[dict],
+    ) -> int:
+        """
+        Upsert credit rows into media_credits.
+        Conflict key: (media_id, name, role). Returns total rows upserted.
+        """
+        rows: list[dict] = []
+
+        for p in directors:
+            rows.append({"media_id": media_id, "name": p["name"], "role": "director", "order": None, "character": None})
+
+        for i, p in enumerate(writers):
+            rows.append({"media_id": media_id, "name": p["name"], "role": "writer", "order": p.get("order", i + 1), "character": None})
+
+        for p in cast:
+            rows.append({"media_id": media_id, "name": p["name"], "role": "cast", "order": None, "character": p.get("character", "")})
+
+        if not rows:
+            return 0
+
+        try:
+            self.client.table("media_credits").upsert(
+                rows,
+                on_conflict="media_id,name,role",
+            ).execute()
+            print(f"[Supabase] Upserted {len(rows)} credit(s) for media_id={media_id}.")
+            return len(rows)
+        except Exception as exc:
+            print(f"[Supabase] Error upserting credits for media_id={media_id}: {exc}")
+            return 0
+
     def upsert_trailers(self, media_id: int, trailers: list[dict]) -> int:
         """
         Upsert trailer rows into media_trailers for the given media row.

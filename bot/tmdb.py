@@ -369,6 +369,53 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique top rated movies.")
         return results
 
+    def get_credits(self, tmdb_id: int, media_type: str) -> dict:
+        """
+        Return directors, writers, and top-20 cast for a title.
+
+        Movies use /movie/{id}/credits; TV uses /tv/{id}/aggregate_credits
+        (which rolls up appearances across seasons).
+        """
+        endpoint = (
+            f"/movie/{tmdb_id}/credits"
+            if media_type == "movie"
+            else f"/tv/{tmdb_id}/aggregate_credits"
+        )
+        try:
+            data = self._get(endpoint)
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch credits for {media_type}/{tmdb_id}: {exc}")
+            return {"directors": [], "writers": [], "cast": []}
+
+        crew = data.get("crew", [])
+
+        directors = [
+            {"name": m["name"]}
+            for m in crew
+            if m.get("job") == "Director"
+        ]
+
+        writer_priority = {"Writer": 1, "Screenplay": 2, "Story": 2}
+        writers_raw = [
+            {"name": m["name"], "order": writer_priority[m["job"]]}
+            for m in crew
+            if m.get("job") in writer_priority
+        ]
+        seen_writer: set[str] = set()
+        writers: list[dict] = []
+        for w in sorted(writers_raw, key=lambda x: x["order"]):
+            if w["name"] not in seen_writer:
+                seen_writer.add(w["name"])
+                writers.append(w)
+
+        cast_raw = data.get("cast", [])
+        cast = [
+            {"name": m.get("name", ""), "character": m.get("character", "")}
+            for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
+        ][:20]
+
+        return {"directors": directors, "writers": writers, "cast": cast}
+
     def get_videos(self, tmdb_id: int, media_type: str) -> list[dict]:
         """Return official YouTube trailers and teasers for a title from TMDB."""
         try:
