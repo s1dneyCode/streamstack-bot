@@ -137,9 +137,11 @@ class SupabaseClient:
         directors: list[dict],
         writers: list[dict],
         cast: list[dict],
+        created_by: list[dict] | None = None,
     ) -> int:
         """
         Upsert credit rows into media_credits.
+        Roles: "director", "writer", "cast", "created_by".
         Conflict key: (media_id, name, role). Returns total rows upserted.
         """
         rows: list[dict] = []
@@ -152,6 +154,9 @@ class SupabaseClient:
 
         for p in cast:
             rows.append({"media_id": media_id, "name": p["name"], "role": "cast", "order": None, "character": p.get("character", "")})
+
+        for p in (created_by or []):
+            rows.append({"media_id": media_id, "name": p["name"], "role": "created_by", "order": None, "character": None})
 
         if not rows:
             return 0

@@ -421,6 +421,7 @@ def main() -> None:
             directors=result["directors"],
             writers=result["writers"],
             cast=result["cast"],
+            created_by=result["created_by"],
         )
         step15_credits += count
         print(f"[BOT] Step 15 {item['title']}: {count} credit(s) added")

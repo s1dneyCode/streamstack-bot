@@ -371,50 +371,75 @@ class TmdbClient:
 
     def get_credits(self, tmdb_id: int, media_type: str) -> dict:
         """
-        Return directors, writers, and top-20 cast for a title.
+        Return credits for a title, split by media_type.
 
-        Movies use /movie/{id}/credits; TV uses /tv/{id}/aggregate_credits
-        (which rolls up appearances across seasons).
+        Movies  → /movie/{id}/credits
+                  directors (job==Director), writers (Writer/Screenplay/Story), cast (top-20)
+
+        TV      → /tv/{id} (created_by) + /tv/{id}/aggregate_credits (cast top-20)
+                  created_by from show detail, no writers, cast (top-20)
         """
-        endpoint = (
-            f"/movie/{tmdb_id}/credits"
-            if media_type == "movie"
-            else f"/tv/{tmdb_id}/aggregate_credits"
-        )
-        try:
-            data = self._get(endpoint)
-        except Exception as exc:
-            print(f"[TMDB] Could not fetch credits for {media_type}/{tmdb_id}: {exc}")
-            return {"directors": [], "writers": [], "cast": []}
+        if media_type == "movie":
+            try:
+                data = self._get(f"/movie/{tmdb_id}/credits")
+            except Exception as exc:
+                print(f"[TMDB] Could not fetch credits for movie/{tmdb_id}: {exc}")
+                return {"directors": [], "writers": [], "cast": [], "created_by": []}
 
-        crew = data.get("crew", [])
+            crew = data.get("crew", [])
 
-        directors = [
-            {"name": m["name"]}
-            for m in crew
-            if m.get("job") == "Director"
-        ]
+            directors = [
+                {"name": m["name"]}
+                for m in crew
+                if m.get("job") == "Director"
+            ]
 
-        writer_priority = {"Writer": 1, "Screenplay": 2, "Story": 2}
-        writers_raw = [
-            {"name": m["name"], "order": writer_priority[m["job"]]}
-            for m in crew
-            if m.get("job") in writer_priority
-        ]
-        seen_writer: set[str] = set()
-        writers: list[dict] = []
-        for w in sorted(writers_raw, key=lambda x: x["order"]):
-            if w["name"] not in seen_writer:
-                seen_writer.add(w["name"])
-                writers.append(w)
+            writer_priority = {"Writer": 1, "Screenplay": 2, "Story": 2}
+            writers_raw = [
+                {"name": m["name"], "order": writer_priority[m["job"]]}
+                for m in crew
+                if m.get("job") in writer_priority
+            ]
+            seen_writer: set[str] = set()
+            writers: list[dict] = []
+            for w in sorted(writers_raw, key=lambda x: x["order"]):
+                if w["name"] not in seen_writer:
+                    seen_writer.add(w["name"])
+                    writers.append(w)
 
-        cast_raw = data.get("cast", [])
-        cast = [
-            {"name": m.get("name", ""), "character": m.get("character", "")}
-            for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
-        ][:20]
+            cast_raw = data.get("cast", [])
+            cast = [
+                {"name": m.get("name", ""), "character": m.get("character", "")}
+                for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
+            ][:20]
 
-        return {"directors": directors, "writers": writers, "cast": cast}
+            return {"directors": directors, "writers": writers, "cast": cast, "created_by": []}
+
+        else:
+            # TV: fetch show detail for created_by, then aggregate_credits for cast
+            created_by: list[dict] = []
+            try:
+                detail = self._get(f"/tv/{tmdb_id}")
+                created_by = [
+                    {"name": p["name"]}
+                    for p in detail.get("created_by", [])
+                    if p.get("name")
+                ]
+            except Exception as exc:
+                print(f"[TMDB] Could not fetch TV detail for {tmdb_id}: {exc}")
+
+            cast: list[dict] = []
+            try:
+                agg = self._get(f"/tv/{tmdb_id}/aggregate_credits")
+                cast_raw = agg.get("cast", [])
+                cast = [
+                    {"name": m.get("name", ""), "character": m.get("character", "")}
+                    for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
+                ][:20]
+            except Exception as exc:
+                print(f"[TMDB] Could not fetch aggregate_credits for tv/{tmdb_id}: {exc}")
+
+            return {"directors": [], "writers": [], "cast": cast, "created_by": created_by}
 
     def get_videos(self, tmdb_id: int, media_type: str) -> list[dict]:
         """Return official YouTube trailers and teasers for a title from TMDB."""
