@@ -19,6 +19,10 @@ on:
           - trailers
           - credits
           - runtime
+      role:
+        description: 'Credits role filter (optional, e.g. producer). Only used when job == credits.'
+        required: false
+        default: ''
 
 jobs:
   backfill-streaming:
@@ -190,7 +194,13 @@ jobs:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_credits
+        run: |
+          ROLE="${{ github.event.inputs.role }}"
+          if [ -n "$ROLE" ]; then
+            python -m bot.backfill_credits --role "$ROLE"
+          else
+            python -m bot.backfill_credits
+          fi
 
   backfill-runtime:
     runs-on: ubuntu-latest
