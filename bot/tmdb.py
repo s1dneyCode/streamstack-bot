@@ -18,6 +18,18 @@ TMDB_BASE = "https://api.themoviedb.org/3"
 # Prefix used to build absolute poster URLs from TMDB's relative path strings
 POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 
+_PRODUCER_JOBS = {"Producer", "Executive Producer"}
+
+
+def _extract_producers(crew: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    result: list[dict] = []
+    for m in crew:
+        if m.get("job") in _PRODUCER_JOBS and m.get("name") and m["name"] not in seen:
+            seen.add(m["name"])
+            result.append({"name": m["name"]})
+    return result
+
 
 class TmdbClient:
     """Thin wrapper around the TMDB REST API."""
@@ -384,7 +396,7 @@ class TmdbClient:
                 data = self._get(f"/movie/{tmdb_id}/credits")
             except Exception as exc:
                 print(f"[TMDB] Could not fetch credits for movie/{tmdb_id}: {exc}")
-                return {"directors": [], "writers": [], "cast": [], "created_by": []}
+                return {"directors": [], "writers": [], "cast": [], "created_by": [], "producers": []}
 
             crew = data.get("crew", [])
 
@@ -413,10 +425,11 @@ class TmdbClient:
                 for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
             ][:20]
 
-            return {"directors": directors, "writers": writers, "cast": cast, "created_by": []}
+            producers = _extract_producers(crew)
+            return {"directors": directors, "writers": writers, "cast": cast, "created_by": [], "producers": producers}
 
         else:
-            # TV: fetch show detail for created_by, then aggregate_credits for cast
+            # TV: fetch show detail for created_by, then aggregate_credits for cast + crew
             created_by: list[dict] = []
             try:
                 detail = self._get(f"/tv/{tmdb_id}")
@@ -429,6 +442,7 @@ class TmdbClient:
                 print(f"[TMDB] Could not fetch TV detail for {tmdb_id}: {exc}")
 
             cast: list[dict] = []
+            producers: list[dict] = []
             try:
                 agg = self._get(f"/tv/{tmdb_id}/aggregate_credits")
                 cast_raw = agg.get("cast", [])
@@ -436,10 +450,11 @@ class TmdbClient:
                     {"name": m.get("name", ""), "character": m.get("character", "")}
                     for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
                 ][:20]
+                producers = _extract_producers(agg.get("crew", []))
             except Exception as exc:
                 print(f"[TMDB] Could not fetch aggregate_credits for tv/{tmdb_id}: {exc}")
 
-            return {"directors": [], "writers": [], "cast": cast, "created_by": created_by}
+            return {"directors": [], "writers": [], "cast": cast, "created_by": created_by, "producers": producers}
 
     def get_videos(self, tmdb_id: int, media_type: str) -> list[dict]:
         """Return official YouTube trailers and teasers for a title from TMDB."""

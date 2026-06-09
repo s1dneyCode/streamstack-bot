@@ -63,6 +63,8 @@ class SupabaseClient:
 
         try:
             upsert_payload = {**media_dict, "popularity": media_dict.get("popularity", 0.0), "tmdb_score": media_dict.get("tmdb_score", 0), "imdb_id": media_dict.get("imdb_id", None)}
+            if media_dict.get("media_type") == "movie":
+                upsert_payload["runtime"] = media_dict.get("runtime")
             self.client.table("media").upsert(upsert_payload, on_conflict="tmdb_id").execute()
 
             # Fetch the row id in a separate query — chaining .select() after
@@ -138,10 +140,11 @@ class SupabaseClient:
         writers: list[dict],
         cast: list[dict],
         created_by: list[dict] | None = None,
+        producers: list[dict] | None = None,
     ) -> int:
         """
         Upsert credit rows into media_credits.
-        Roles: "director", "writer", "cast", "created_by".
+        Roles: "director", "writer", "cast", "created_by", "producer".
         Conflict key: (media_id, name, role). Returns total rows upserted.
         """
         rows: list[dict] = []
@@ -157,6 +160,9 @@ class SupabaseClient:
 
         for p in (created_by or []):
             rows.append({"media_id": media_id, "name": p["name"], "role": "created_by", "order": None, "character": None})
+
+        for p in (producers or []):
+            rows.append({"media_id": media_id, "name": p["name"], "role": "producer", "order": None, "character": None})
 
         if not rows:
             return 0

@@ -2,10 +2,15 @@
 One-time backfill: fetch and store credits for all media titles that
 currently have no entries in media_credits.
 
-Run via:
-    python -m bot.backfill_credits              # all types
+Flags:
+    --media-type movie|tv   Only process titles of that type (default: all)
+    --role producer         Re-run only the producer role for ALL titles
+                            (upserts producer rows, ignores has_credits check)
+
+Examples:
+    python -m bot.backfill_credits
     python -m bot.backfill_credits --media-type tv
-    python -m bot.backfill_credits --media-type movie
+    python -m bot.backfill_credits --role producer
 """
 
 import os
@@ -29,9 +34,10 @@ def load_env() -> dict[str, str]:
 
 
 def main() -> None:
-    # Parse optional --media-type argument
-    media_type_filter: str | None = None
     args = sys.argv[1:]
+
+    # --media-type flag
+    media_type_filter: str | None = None
     if "--media-type" in args:
         idx = args.index("--media-type")
         if idx + 1 >= len(args):
@@ -42,81 +48,124 @@ def main() -> None:
             print(f"[CREDITS] ERROR: --media-type must be 'movie' or 'tv', got '{media_type_filter}'.")
             sys.exit(1)
 
-    label = f" ({media_type_filter} only)" if media_type_filter else ""
+    # --role flag
+    role_filter: str | None = None
+    if "--role" in args:
+        idx = args.index("--role")
+        if idx + 1 >= len(args):
+            print("[CREDITS] ERROR: --role requires a value (e.g. producer).")
+            sys.exit(1)
+        role_filter = args[idx + 1]
+
+    producer_only = role_filter == "producer"
+
+    label_parts = []
+    if media_type_filter:
+        label_parts.append(f"{media_type_filter} only")
+    if producer_only:
+        label_parts.append("producer role backfill")
+    label = f" ({', '.join(label_parts)})" if label_parts else ""
+
     print(f"[CREDITS] Starting credits backfill{label}...")
     config = load_env()
 
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
 
-    # Collect media_ids that already have at least one credit row
-    credit_rows = db.client.table("media_credits").select("media_id").execute().data or []
-    has_credits: set[str] = {row["media_id"] for row in credit_rows}
+    # When running --role producer, process ALL titles regardless of existing credits
+    if not producer_only:
+        credit_rows = db.client.table("media_credits").select("media_id").execute().data or []
+        has_credits: set[str] = {row["media_id"] for row in credit_rows}
+    else:
+        has_credits = set()  # not used in producer_only mode
 
-    # Fetch all media titles (paginated), optionally filtered by media_type
+    # Fetch media titles (paginated), optionally filtered by media_type
     page_size = 1000
     offset    = 0
     all_media: list[dict] = []
     while True:
-        query = (
-            db.client.table("media")
-            .select("id, tmdb_id, title, media_type")
-        )
+        query = db.client.table("media").select("id, tmdb_id, title, media_type")
         if media_type_filter:
             query = query.eq("media_type", media_type_filter)
-
         batch = query.range(offset, offset + page_size - 1).execute().data or []
         all_media.extend(batch)
         if len(batch) < page_size:
             break
         offset += page_size
 
-    needs_credits = [row for row in all_media if row["id"] not in has_credits]
-    total = len(needs_credits)
-    print(f"[CREDITS] {total} titles need credits backfill.")
+    if producer_only:
+        targets = all_media
+    else:
+        targets = [row for row in all_media if row["id"] not in has_credits]
+
+    total = len(targets)
+    print(f"[CREDITS] {total} titles to process.")
 
     total_directors  = 0
     total_writers    = 0
     total_cast       = 0
     total_created_by = 0
+    total_producers  = 0
     no_credits       = 0
 
-    for i, row in enumerate(needs_credits, start=1):
+    for i, row in enumerate(targets, start=1):
         result = tmdb.get_credits(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
 
         directors  = result["directors"]
         writers    = result["writers"]
         cast       = result["cast"]
         created_by = result["created_by"]
+        producers  = result["producers"]
 
-        count = db.upsert_credits(
-            media_id=row["id"],
-            directors=directors,
-            writers=writers,
-            cast=cast,
-            created_by=created_by,
-        )
+        if producer_only:
+            # Only upsert producer rows; leave other roles untouched
+            count = db.upsert_credits(
+                media_id=row["id"],
+                directors=[],
+                writers=[],
+                cast=[],
+                created_by=[],
+                producers=producers,
+            )
+        else:
+            count = db.upsert_credits(
+                media_id=row["id"],
+                directors=directors,
+                writers=writers,
+                cast=cast,
+                created_by=created_by,
+                producers=producers,
+            )
 
-        total_directors  += len(directors)
-        total_writers    += len(writers)
-        total_cast       += len(cast)
-        total_created_by += len(created_by)
+        total_directors  += len(directors)  if not producer_only else 0
+        total_writers    += len(writers)    if not producer_only else 0
+        total_cast       += len(cast)       if not producer_only else 0
+        total_created_by += len(created_by) if not producer_only else 0
+        total_producers  += len(producers)
 
         if count == 0:
             no_credits += 1
 
         print(
             f"[CREDITS] {i}/{total} {row['title']} ({row['media_type']}): "
-            f"{len(directors)}d / {len(writers)}w / {len(cast)}c / {len(created_by)}cb"
+            + (f"{len(producers)}p" if producer_only else
+               f"{len(directors)}d / {len(writers)}w / {len(cast)}c / {len(created_by)}cb / {len(producers)}p")
         )
         time.sleep(0.25)
 
-    print(
-        f"[CREDITS] Done. {total} titles processed — "
-        f"{total_directors} directors, {total_writers} writers, "
-        f"{total_cast} cast, {total_created_by} created_by inserted. "
-        f"{no_credits} titles with no credits found."
-    )
+    if producer_only:
+        print(
+            f"[CREDITS] Done. {total} titles processed — "
+            f"{total_producers} producers inserted. "
+            f"{no_credits} titles with no producers found."
+        )
+    else:
+        print(
+            f"[CREDITS] Done. {total} titles processed — "
+            f"{total_directors} directors, {total_writers} writers, "
+            f"{total_cast} cast, {total_created_by} created_by, {total_producers} producers inserted. "
+            f"{no_credits} titles with no credits found."
+        )
 
 
 if __name__ == "__main__":

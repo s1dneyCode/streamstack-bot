@@ -178,6 +178,7 @@ def main() -> None:
             "is_streamable_now": len(providers) > 0,
             "popularity": item.get("popularity", 0.0),
             "imdb_id": item.get("imdb_id"),
+            "runtime": item.get("runtime"),
         }
 
         # --- Persist media row to Supabase ------------------------------
@@ -422,6 +423,7 @@ def main() -> None:
             writers=result["writers"],
             cast=result["cast"],
             created_by=result["created_by"],
+            producers=result["producers"],
         )
         step15_credits += count
         print(f"[BOT] Step 15 {item['title']}: {count} credit(s) added")
