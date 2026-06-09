@@ -179,6 +179,7 @@ def main() -> None:
             "popularity": item.get("popularity", 0.0),
             "imdb_id": item.get("imdb_id"),
             "runtime": item.get("runtime"),
+            "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type),
         }
 
         # --- Persist media row to Supabase ------------------------------

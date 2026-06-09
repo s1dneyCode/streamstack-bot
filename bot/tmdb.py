@@ -456,6 +456,27 @@ class TmdbClient:
 
             return {"directors": [], "writers": [], "cast": cast, "created_by": created_by, "producers": producers}
 
+    def get_title_logo(self, tmdb_id: int, media_type: str) -> str | None:
+        """
+        Return a full image URL for the title's logo, preferring English.
+        Falls back to the first logo in any language if no English logo exists.
+        Returns None if no logos are available.
+        """
+        try:
+            data = self._get(f"/{media_type}/{tmdb_id}/images")
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch images for {media_type}/{tmdb_id}: {exc}")
+            return None
+
+        logos = data.get("logos", [])
+        if not logos:
+            return None
+
+        en_logos = [l for l in logos if l.get("iso_639_1") == "en"]
+        chosen = en_logos[0] if en_logos else logos[0]
+        file_path = chosen.get("file_path", "")
+        return f"{POSTER_BASE}{file_path}" if file_path else None
+
     def get_videos(self, tmdb_id: int, media_type: str) -> list[dict]:
         """Return official YouTube trailers and teasers for a title from TMDB."""
         try:
