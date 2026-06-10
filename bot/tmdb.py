@@ -456,6 +456,32 @@ class TmdbClient:
 
             return {"directors": [], "writers": [], "cast": cast, "created_by": created_by, "producers": producers}
 
+    def get_seasons(self, tmdb_id: int) -> list[dict]:
+        """Return seasons for a TV show, excluding season_number == 0 (Specials)."""
+        try:
+            data = self._get(f"/tv/{tmdb_id}")
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch TV detail for {tmdb_id}: {exc}")
+            return []
+        return [s for s in data.get("seasons", []) if s.get("season_number", 0) != 0]
+
+    def get_season_episodes(self, tmdb_id: int, season_number: int) -> list[dict]:
+        """Return episodes for a specific season with episode_number, name, runtime, air_date."""
+        try:
+            data = self._get(f"/tv/{tmdb_id}/season/{season_number}")
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch season {season_number} for tv/{tmdb_id}: {exc}")
+            return []
+        return [
+            {
+                "episode_number": ep.get("episode_number"),
+                "name":           ep.get("name", ""),
+                "runtime":        ep.get("runtime"),
+                "air_date":       ep.get("air_date"),
+            }
+            for ep in data.get("episodes", [])
+        ]
+
     def get_certification(self, tmdb_id: int, media_type: str) -> str | None:
         """
         Return the US content certification for a title.

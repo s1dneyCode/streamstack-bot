@@ -23,7 +23,7 @@ from .tmdb import TmdbClient
 from .omdb import OmdbClient
 from .streaming import StreamingClient
 from .supabase_client import SupabaseClient
-from .migrate_images import migrate_poster, migrate_carousel
+from .migrate_images import migrate_poster, migrate_carousel, download_image
 
 
 def load_env() -> dict[str, str]:
@@ -432,6 +432,73 @@ def main() -> None:
         time.sleep(0.25)
 
     print(f"[BOT] Step 15 done. {len(needs_credits)} titles processed, {step15_credits} credits inserted.")
+
+    # ------------------------------------------------------------------ #
+    # Step 16 — Fetch and store seasons + episodes for TV shows           #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 16: Fetching seasons and episodes for TV shows with none...")
+
+    season_media_ids: set[str] = {
+        row["media_id"]
+        for row in (db.client.table("media_seasons").select("media_id").execute().data or [])
+    }
+
+    offset = 0
+    all_tv: list[dict] = []
+    while True:
+        batch = (
+            db.client.table("media")
+            .select("id, tmdb_id, title")
+            .eq("media_type", "tv")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data or []
+        )
+        all_tv.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    needs_seasons = [t for t in all_tv if t["id"] not in season_media_ids][:20]
+
+    step16_seasons  = 0
+    step16_episodes = 0
+
+    for item in needs_seasons:
+        seasons_raw = tmdb.get_seasons(tmdb_id=item["tmdb_id"])
+
+        # Download and upload season posters
+        for s in seasons_raw:
+            poster_path = s.get("poster_path", "")
+            if poster_path:
+                img = download_image(f"https://image.tmdb.org/t/p/w500{poster_path}")
+                if img:
+                    url = db.upload_image(
+                        "media-images",
+                        f"seasons/{item['tmdb_id']}/{s['season_number']}.jpg",
+                        img,
+                    )
+                    s["poster_url"] = url
+
+        season_rows = db.upsert_seasons(media_id=item["id"], seasons=seasons_raw)
+        step16_seasons += len(season_rows)
+
+        season_map = {r["season_number"]: r["id"] for r in season_rows}
+        for s in seasons_raw:
+            season_id = season_map.get(s["season_number"])
+            if not season_id:
+                continue
+            episodes = tmdb.get_season_episodes(
+                tmdb_id=item["tmdb_id"], season_number=s["season_number"]
+            )
+            step16_episodes += db.upsert_episodes(season_id=season_id, episodes=episodes)
+            time.sleep(0.25)
+
+        db.update_tv_runtime(media_id=item["id"])
+        print(f"[BOT] Step 16 {item['title']}: {len(season_rows)} seasons")
+        time.sleep(0.5)
+
+    print(f"[BOT] Step 16 done. {len(needs_seasons)} shows processed, {step16_seasons} seasons, {step16_episodes} episodes inserted.")
 
 
 if __name__ == "__main__":

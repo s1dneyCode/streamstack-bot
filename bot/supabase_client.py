@@ -135,6 +135,94 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error updating streaming_last_checked for media_id={media_id}: {exc}")
 
+    def upsert_seasons(self, media_id: str, seasons: list[dict]) -> list[dict]:
+        """
+        Upsert season rows into media_seasons.
+        Conflict key: (media_id, season_number).
+        Returns the upserted rows (with id) for use by upsert_episodes.
+        """
+        if not seasons:
+            return []
+        rows = [
+            {
+                "media_id":      media_id,
+                "season_number": s["season_number"],
+                "name":          s.get("name", ""),
+                "episode_count": s.get("episode_count"),
+                "air_date":      s.get("air_date") or None,
+                "poster_url":    s.get("poster_url"),
+            }
+            for s in seasons
+        ]
+        try:
+            self.client.table("media_seasons").upsert(
+                rows, on_conflict="media_id,season_number"
+            ).execute()
+            result = (
+                self.client.table("media_seasons")
+                .select("id, season_number")
+                .eq("media_id", media_id)
+                .execute()
+            )
+            print(f"[Supabase] Upserted {len(rows)} season(s) for media_id={media_id}.")
+            return result.data or []
+        except Exception as exc:
+            print(f"[Supabase] Error upserting seasons for media_id={media_id}: {exc}")
+            return []
+
+    def upsert_episodes(self, season_id: str, episodes: list[dict]) -> int:
+        """
+        Upsert episode rows into media_episodes.
+        Conflict key: (season_id, episode_number). Returns rows upserted.
+        """
+        if not episodes:
+            return 0
+        rows = [
+            {
+                "season_id":      season_id,
+                "episode_number": ep["episode_number"],
+                "name":           ep.get("name", ""),
+                "runtime":        ep.get("runtime"),
+                "air_date":       ep.get("air_date") or None,
+            }
+            for ep in episodes
+            if ep.get("episode_number") is not None
+        ]
+        if not rows:
+            return 0
+        try:
+            self.client.table("media_episodes").upsert(
+                rows, on_conflict="season_id,episode_number"
+            ).execute()
+            print(f"[Supabase] Upserted {len(rows)} episode(s) for season_id={season_id}.")
+            return len(rows)
+        except Exception as exc:
+            print(f"[Supabase] Error upserting episodes for season_id={season_id}: {exc}")
+            return 0
+
+    def update_tv_runtime(self, media_id: str) -> int | None:
+        """
+        Compute average runtime across all episodes for a TV show and update media.runtime.
+        Skips null/0 values. Returns the computed average or None if no data.
+        """
+        try:
+            rows = (
+                self.client.table("media_episodes")
+                .select("runtime, media_seasons!inner(media_id)")
+                .eq("media_seasons.media_id", media_id)
+                .execute()
+                .data or []
+            )
+            runtimes = [r["runtime"] for r in rows if r.get("runtime")]
+            if not runtimes:
+                return None
+            avg = round(sum(runtimes) / len(runtimes))
+            self.client.table("media").update({"runtime": avg}).eq("id", media_id).execute()
+            return avg
+        except Exception as exc:
+            print(f"[Supabase] Error updating TV runtime for media_id={media_id}: {exc}")
+            return None
+
     def upsert_credits(
         self,
         media_id: str,
