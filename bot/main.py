@@ -180,7 +180,8 @@ def main() -> None:
             "imdb_id": item.get("imdb_id"),
             "runtime": item.get("runtime"),
             "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type),
-            "certification": tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type),
+            "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type),
+            "genres":         [g for g in item.get("genre", "").split(", ") if g],
         }
 
         # --- Persist media row to Supabase ------------------------------
