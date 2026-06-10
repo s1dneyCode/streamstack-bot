@@ -66,6 +66,7 @@ class SupabaseClient:
             if media_dict.get("media_type") == "movie":
                 upsert_payload["runtime"] = media_dict.get("runtime")
             upsert_payload["title_logo_url"] = media_dict.get("title_logo_url")
+            upsert_payload["certification"] = media_dict.get("certification")
             self.client.table("media").upsert(upsert_payload, on_conflict="tmdb_id").execute()
 
             # Fetch the row id in a separate query — chaining .select() after

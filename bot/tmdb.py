@@ -456,6 +456,33 @@ class TmdbClient:
 
             return {"directors": [], "writers": [], "cast": cast, "created_by": created_by, "producers": producers}
 
+    def get_certification(self, tmdb_id: int, media_type: str) -> str | None:
+        """
+        Return the US content certification for a title.
+
+        Movies  → /movie/{id}/release_dates: find iso_3166_1=='US', take the
+                  first release_date entry with a non-empty certification.
+        TV      → /tv/{id}/content_ratings: find iso_3166_1=='US', take rating.
+        """
+        try:
+            if media_type == "movie":
+                data = self._get(f"/movie/{tmdb_id}/release_dates")
+                for country in data.get("results", []):
+                    if country.get("iso_3166_1") == "US":
+                        for entry in country.get("release_dates", []):
+                            cert = entry.get("certification", "").strip()
+                            if cert:
+                                return cert
+            else:
+                data = self._get(f"/tv/{tmdb_id}/content_ratings")
+                for country in data.get("results", []):
+                    if country.get("iso_3166_1") == "US":
+                        rating = country.get("rating", "").strip()
+                        return rating if rating else None
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch certification for {media_type}/{tmdb_id}: {exc}")
+        return None
+
     def get_title_logo(self, tmdb_id: int, media_type: str) -> str | None:
         """
         Return a full image URL for the title's logo, preferring English.
