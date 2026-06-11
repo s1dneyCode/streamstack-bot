@@ -337,7 +337,7 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique popular TV shows.")
         return results
 
-    def get_top_rated_movies(self, pages: int = 2, genre_map: dict[int, str] | None = None) -> list[dict]:
+    def get_top_rated_movies(self, pages: int = 15, genre_map: dict[int, str] | None = None) -> list[dict]:
         """Fetch highest-rated movies on TMDB."""
         genre_map = genre_map or {}
         seen_ids: set[int] = set()
@@ -379,6 +379,182 @@ class TmdbClient:
                 )
 
         print(f"[TMDB] Collected {len(results)} unique top rated movies.")
+        return results
+
+    def get_discover_movies_by_revenue(self, pages: int = 15, genre_map: dict[int, str] | None = None) -> list[dict]:
+        """Fetch highest-grossing movies via /discover/movie sorted by revenue."""
+        genre_map = genre_map or {}
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of discover movies (revenue)...")
+            data = self._get(
+                "/discover/movie",
+                params={"sort_by": "revenue.desc", "language": "en-US", "page": page},
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("title", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "movie",
+                        "release_date": format_date(item.get("release_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                        "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
+                        "imdb_id": item.get("imdb_id", None),
+                        "popularity": item.get("popularity", 0.0),
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique discover movies (revenue).")
+        return results
+
+    def get_discover_movies_by_vote_count(self, pages: int = 15, genre_map: dict[int, str] | None = None) -> list[dict]:
+        """Fetch most-voted movies via /discover/movie sorted by vote_count."""
+        genre_map = genre_map or {}
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of discover movies (vote count)...")
+            data = self._get(
+                "/discover/movie",
+                params={"sort_by": "vote_count.desc", "language": "en-US", "page": page},
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("title", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "movie",
+                        "release_date": format_date(item.get("release_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                        "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
+                        "imdb_id": item.get("imdb_id", None),
+                        "popularity": item.get("popularity", 0.0),
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique discover movies (vote count).")
+        return results
+
+    def get_top_rated_tv(self, pages: int = 15, genre_map: dict[int, str] | None = None) -> list[dict]:
+        """Fetch highest-rated TV shows on TMDB."""
+        genre_map = genre_map or {}
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of top rated TV...")
+            data = self._get(
+                "/tv/top_rated",
+                params={"language": "en-US", "page": page},
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("name", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "tv",
+                        "release_date": format_date(item.get("first_air_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                        "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
+                        "imdb_id": item.get("imdb_id", None),
+                        "popularity": item.get("popularity", 0.0),
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique top rated TV shows.")
+        return results
+
+    def get_discover_tv_by_vote_count(self, pages: int = 15, genre_map: dict[int, str] | None = None) -> list[dict]:
+        """Fetch most-voted TV shows via /discover/tv sorted by vote_count."""
+        genre_map = genre_map or {}
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of discover TV (vote count)...")
+            data = self._get(
+                "/discover/tv",
+                params={"sort_by": "vote_count.desc", "language": "en-US", "page": page},
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("name", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "tv",
+                        "release_date": format_date(item.get("first_air_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                        "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
+                        "imdb_id": item.get("imdb_id", None),
+                        "popularity": item.get("popularity", 0.0),
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique discover TV shows (vote count).")
         return results
 
     def get_credits(self, tmdb_id: int, media_type: str) -> dict:

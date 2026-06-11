@@ -111,8 +111,36 @@ def main() -> None:
     # Step 6 — Fetch top-rated movies from TMDB                           #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 6: Fetching top-rated movies from TMDB...")
-    top_rated = tmdb.get_top_rated_movies(pages=2, genre_map=movie_genre_map)
+    top_rated = tmdb.get_top_rated_movies(pages=15, genre_map=movie_genre_map)
     print(f"[BOT] Fetched {len(top_rated)} top-rated movies.")
+
+    # ------------------------------------------------------------------ #
+    # Step 6b — Discover movies by revenue                                #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 6b: Fetching discover movies (revenue) from TMDB...")
+    discover_movies_revenue = tmdb.get_discover_movies_by_revenue(pages=15, genre_map=movie_genre_map)
+    print(f"[BOT] Fetched {len(discover_movies_revenue)} discover movies (revenue).")
+
+    # ------------------------------------------------------------------ #
+    # Step 6c — Discover movies by vote count                             #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 6c: Fetching discover movies (vote count) from TMDB...")
+    discover_movies_votes = tmdb.get_discover_movies_by_vote_count(pages=15, genre_map=movie_genre_map)
+    print(f"[BOT] Fetched {len(discover_movies_votes)} discover movies (vote count).")
+
+    # ------------------------------------------------------------------ #
+    # Step 6d — Fetch top-rated TV shows from TMDB                        #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 6d: Fetching top-rated TV shows from TMDB...")
+    top_rated_tv = tmdb.get_top_rated_tv(pages=15, genre_map=tv_genre_map)
+    print(f"[BOT] Fetched {len(top_rated_tv)} top-rated TV shows.")
+
+    # ------------------------------------------------------------------ #
+    # Step 6e — Discover TV shows by vote count                           #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 6e: Fetching discover TV shows (vote count) from TMDB...")
+    discover_tv_votes = tmdb.get_discover_tv_by_vote_count(pages=15, genre_map=tv_genre_map)
+    print(f"[BOT] Fetched {len(discover_tv_votes)} discover TV shows (vote count).")
 
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate by tmdb_id                         #
@@ -121,7 +149,8 @@ def main() -> None:
     combined: list[dict] = []
     seen_ids: set[int] = set()
 
-    for item in now_playing + on_air + upcoming + popular_movies + popular_tv + top_rated:
+    for item in (now_playing + on_air + upcoming + popular_movies + popular_tv + top_rated
+                 + discover_movies_revenue + discover_movies_votes + top_rated_tv + discover_tv_votes):
         tid = item["tmdb_id"]
         if tid not in seen_ids:
             seen_ids.add(tid)
