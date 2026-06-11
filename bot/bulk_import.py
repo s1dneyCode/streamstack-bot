@@ -163,6 +163,13 @@ def main() -> None:
     print(f"[BULK] {len(combined)} unique titles after deduplication.")
 
     # ------------------------------------------------------------------ #
+    # Step 7b — Filter out low-quality titles (vote_count < 200)          #
+    # ------------------------------------------------------------------ #
+    before_filter = len(combined)
+    combined = [item for item in combined if (item.get("vote_count") or 0) >= 200]
+    print(f"[BULK] {len(combined)} titles after vote_count filter ({before_filter - len(combined)} removed).")
+
+    # ------------------------------------------------------------------ #
     # Step 8 — Filter out titles already in DB                            #
     # ------------------------------------------------------------------ #
     print("\n[BULK] Step 8: Loading existing tmdb_ids from Supabase...")
