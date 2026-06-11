@@ -147,8 +147,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -201,8 +202,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -247,8 +249,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -293,8 +296,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -339,8 +343,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -385,8 +390,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -431,8 +437,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -477,8 +484,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -523,8 +531,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -569,8 +578,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -626,8 +636,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -683,8 +694,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -739,8 +751,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 
@@ -795,8 +808,9 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
-                        "vote_count": item.get("vote_count"),
-                        "status":     item.get("status"),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
                     }
                 )
 

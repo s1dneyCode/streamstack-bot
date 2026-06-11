@@ -11,6 +11,7 @@ Run via:
 
 import os
 import sys
+from datetime import date, timedelta
 
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
@@ -163,11 +164,30 @@ def main() -> None:
     print(f"[BULK] {len(combined)} unique titles after deduplication.")
 
     # ------------------------------------------------------------------ #
-    # Step 7b — Filter out low-quality titles (vote_count < 200)          #
+    # Step 7b — Quality filters (language + tiered vote_count)            #
     # ------------------------------------------------------------------ #
+    _ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh'}
+    _CUTOFF_DATE = date.today() - timedelta(days=365)
+
+    def _passes_filters(item: dict) -> bool:
+        if item.get("original_language") not in _ALLOWED_LANGUAGES:
+            return False
+        votes = item.get("vote_count") or 0
+        release = item.get("release_date")
+        if release:
+            try:
+                is_recent = date.fromisoformat(release) >= _CUTOFF_DATE
+            except ValueError:
+                is_recent = False
+        else:
+            is_recent = False
+        threshold = 200 if is_recent else 500
+        return votes >= threshold
+
     before_filter = len(combined)
-    combined = [item for item in combined if (item.get("vote_count") or 0) >= 200]
-    print(f"[BULK] {len(combined)} titles after vote_count filter ({before_filter - len(combined)} removed).")
+    combined = [item for item in combined if _passes_filters(item)]
+    removed = before_filter - len(combined)
+    print(f"[BULK] {len(combined)} titles after quality filters ({removed} removed).")
 
     # ------------------------------------------------------------------ #
     # Step 8 — Filter out titles already in DB                            #
