@@ -181,8 +181,14 @@ def main() -> None:
                 is_recent = False
         else:
             is_recent = False
-        threshold = 200 if is_recent else 500
-        return votes >= threshold
+        threshold = 100 if is_recent else 200
+        if votes < threshold:
+            return False
+        if item.get("media_type") == "movie":
+            runtime = item.get("runtime")
+            if runtime is not None and runtime < 40:
+                return False
+        return True
 
     before_filter = len(combined)
     combined = [item for item in combined if _passes_filters(item)]
