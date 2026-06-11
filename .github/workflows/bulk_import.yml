@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       batch_size:
-        description: 'Number of new titles to insert (max 2000)'
+        description: 'Number of new titles to insert (max 10000)'
         required: false
         default: '500'
 

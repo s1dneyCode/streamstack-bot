@@ -16,7 +16,7 @@ from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
 
 DEFAULT_BATCH_SIZE = 500
-MAX_BATCH_SIZE     = 2000
+MAX_BATCH_SIZE     = 10000
 
 
 def load_env() -> dict[str, str]:
