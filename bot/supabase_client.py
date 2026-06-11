@@ -32,6 +32,23 @@ from datetime import date, datetime, timedelta, timezone
 
 from supabase import create_client, Client
 
+_BAYES_M = 500    # minimum votes threshold
+_BAYES_C = 72.07  # global mean score
+
+
+def compute_popularity_score(
+    popularity: float,
+    tmdb_score: int,
+    rt_score: int,
+    vote_count: int | None,
+) -> float:
+    normalized = min((popularity or 0.0) / 500 * 100, 100)
+    raw = (normalized * 0.3) + ((tmdb_score or 0) * 0.5) + ((rt_score or 0) * 0.2)
+    v = vote_count or 0
+    if v == 0:
+        return round(raw, 2)
+    return round((v / (v + _BAYES_M)) * raw + (_BAYES_M / (v + _BAYES_M)) * _BAYES_C, 2)
+
 
 class SupabaseClient:
     """Wraps the Supabase Python SDK for the bot's read/write operations."""
@@ -62,13 +79,13 @@ class SupabaseClient:
         print(f"[Supabase] Upserting media: {media_dict.get('title')} (tmdb_id={media_dict.get('tmdb_id')})")
 
         try:
-            popularity = media_dict.get("popularity", 0.0) or 0.0
-            tmdb_score = media_dict.get("tmdb_score", 0) or 0
-            rt_score   = media_dict.get("rt_score", 0) or 0
-            normalized_popularity = min(popularity / 500 * 100, 100)
-            popularity_score = (normalized_popularity * 0.5) + (tmdb_score * 0.3) + (rt_score * 0.2)
+            popularity   = media_dict.get("popularity", 0.0) or 0.0
+            tmdb_score   = media_dict.get("tmdb_score", 0) or 0
+            rt_score     = media_dict.get("rt_score", 0) or 0
+            vote_count   = media_dict.get("vote_count")
+            popularity_score = compute_popularity_score(popularity, tmdb_score, rt_score, vote_count)
 
-            upsert_payload = {**media_dict, "popularity": popularity, "tmdb_score": tmdb_score, "imdb_id": media_dict.get("imdb_id", None), "vote_count": media_dict.get("vote_count"), "popularity_score": round(popularity_score, 2)}
+            upsert_payload = {**media_dict, "popularity": popularity, "tmdb_score": tmdb_score, "imdb_id": media_dict.get("imdb_id", None), "vote_count": vote_count, "popularity_score": popularity_score}
             if media_dict.get("media_type") == "movie":
                 upsert_payload["runtime"] = media_dict.get("runtime")
             upsert_payload["title_logo_url"] = media_dict.get("title_logo_url")

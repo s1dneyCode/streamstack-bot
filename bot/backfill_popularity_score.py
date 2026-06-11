@@ -1,9 +1,13 @@
 """
 Backfill: calculate and update popularity_score for all rows in public.media.
 
-Formula:
+Formula (Bayesian weighted):
     normalized_popularity = min(popularity / 500 * 100, 100)
-    popularity_score = (normalized_popularity * 0.5) + (tmdb_score * 0.3) + (rt_score * 0.2)
+    raw_score = (normalized_popularity * 0.3) + (tmdb_score * 0.5) + (rt_score * 0.2)
+    if vote_count is None or 0:
+        popularity_score = raw_score
+    else:
+        popularity_score = (v / (v + 500)) * raw_score + (500 / (v + 500)) * 72.07
 
 Run via:
     python -m bot.backfill_popularity_score
@@ -12,7 +16,7 @@ Run via:
 import os
 import sys
 
-from .supabase_client import SupabaseClient
+from .supabase_client import SupabaseClient, compute_popularity_score
 
 PAGE_SIZE = 1000
 
@@ -29,18 +33,13 @@ def load_env() -> dict[str, str]:
     return config
 
 
-def compute_score(popularity: float, tmdb_score: int, rt_score: int) -> float:
-    normalized = min((popularity or 0.0) / 500 * 100, 100)
-    return round((normalized * 0.5) + ((tmdb_score or 0) * 0.3) + ((rt_score or 0) * 0.2), 2)
-
-
 def fetch_all_rows(db: SupabaseClient) -> list[dict]:
     rows: list[dict] = []
     offset = 0
     while True:
         batch = (
             db.client.table("media")
-            .select("id, title, popularity, tmdb_score, rt_score")
+            .select("id, title, popularity, tmdb_score, rt_score, vote_count")
             .range(offset, offset + PAGE_SIZE - 1)
             .execute()
             .data or []
@@ -65,7 +64,12 @@ def main() -> None:
     failed  = 0
 
     for i, row in enumerate(rows, start=1):
-        score = compute_score(row.get("popularity"), row.get("tmdb_score"), row.get("rt_score"))
+        score = compute_popularity_score(
+            row.get("popularity"),
+            row.get("tmdb_score"),
+            row.get("rt_score"),
+            row.get("vote_count"),
+        )
         try:
             db.client.table("media").update({"popularity_score": score}).eq("id", row["id"]).execute()
             updated += 1

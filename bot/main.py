@@ -22,7 +22,7 @@ from datetime import date
 from .tmdb import TmdbClient
 from .omdb import OmdbClient
 from .streaming import StreamingClient
-from .supabase_client import SupabaseClient
+from .supabase_client import SupabaseClient, compute_popularity_score
 from .migrate_images import migrate_poster, migrate_carousel, download_image
 
 
@@ -287,11 +287,13 @@ def main() -> None:
         try:
             detail = tmdb._get(f"/{media_type}/{tmdb_id}")
             popularity = detail.get("popularity", 0.0) or 0.0
-            normalized_popularity = min(popularity / 500 * 100, 100)
-            row = db.client.table("media").select("tmdb_score, rt_score").eq("tmdb_id", tmdb_id).single().execute().data or {}
-            tmdb_score = row.get("tmdb_score") or 0
-            rt_score   = row.get("rt_score") or 0
-            popularity_score = round((normalized_popularity * 0.5) + (tmdb_score * 0.3) + (rt_score * 0.2), 2)
+            row = db.client.table("media").select("tmdb_score, rt_score, vote_count").eq("tmdb_id", tmdb_id).single().execute().data or {}
+            popularity_score = compute_popularity_score(
+                popularity,
+                row.get("tmdb_score"),
+                row.get("rt_score"),
+                row.get("vote_count"),
+            )
             db.client.table("media").update({"popularity": popularity, "popularity_score": popularity_score}).eq("tmdb_id", tmdb_id).execute()
             print(f"[BOT] Updated popularity for {title}: {popularity} → score={popularity_score}")
         except Exception as exc:
