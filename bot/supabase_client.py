@@ -85,7 +85,7 @@ class SupabaseClient:
             vote_count   = media_dict.get("vote_count")
             popularity_score = compute_popularity_score(popularity, tmdb_score, rt_score, vote_count)
 
-            upsert_payload = {**media_dict, "popularity": popularity, "tmdb_score": tmdb_score, "imdb_id": media_dict.get("imdb_id", None), "vote_count": vote_count, "popularity_score": popularity_score}
+            upsert_payload = {**media_dict, "popularity": popularity, "tmdb_score": tmdb_score, "imdb_id": media_dict.get("imdb_id", None), "vote_count": vote_count, "status": media_dict.get("status"), "popularity_score": popularity_score}
             if media_dict.get("media_type") == "movie":
                 upsert_payload["runtime"] = media_dict.get("runtime")
             upsert_payload["title_logo_url"] = media_dict.get("title_logo_url")

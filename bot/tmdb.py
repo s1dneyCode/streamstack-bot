@@ -148,6 +148,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -201,6 +202,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -246,6 +248,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -291,6 +294,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -336,6 +340,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -381,6 +386,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -426,6 +432,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -471,6 +478,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -516,6 +524,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -561,6 +570,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -617,6 +627,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -673,6 +684,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -728,6 +740,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 
@@ -783,6 +796,7 @@ class TmdbClient:
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
                         "vote_count": item.get("vote_count"),
+                        "status":     item.get("status"),
                     }
                 )
 

@@ -212,6 +212,7 @@ def main() -> None:
             "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type),
             "genres":         [g for g in item.get("genre", "").split(", ") if g],
             "vote_count":     item.get("vote_count"),
+            "status":         item.get("status"),
         }
 
         # --- Persist media row to Supabase ------------------------------
