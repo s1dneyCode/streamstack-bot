@@ -139,19 +139,18 @@ def main() -> None:
 
     for index, item in enumerate(batch, start=1):
         media_record = {
-            "tmdb_id":    item["tmdb_id"],
-            "title":      item["title"],
-            "overview":   item.get("overview"),
+            "tmdb_id":     item["tmdb_id"],
+            "title":       item["title"],
+            "overview":    item.get("overview"),
             "poster_path": item.get("poster_path"),
-            "media_type": item["media_type"],
+            "media_type":  item["media_type"],
             "release_date": item.get("release_date"),
-            "vote_average": item.get("vote_average", 0.0),
-            "tmdb_score": item.get("tmdb_score", 0),
-            "genre":      item.get("genre", ""),
-            "genres":     [g for g in item.get("genre", "").split(", ") if g],
-            "imdb_id":    item.get("imdb_id"),
-            "popularity": item.get("popularity", 0.0),
-            "is_in_theatres":   False,
+            "tmdb_score":  item.get("tmdb_score", 0),
+            "genre":       item.get("genre", ""),
+            "genres":      [g for g in item.get("genre", "").split(", ") if g],
+            "imdb_id":     item.get("imdb_id"),
+            "popularity":  item.get("popularity", 0.0),
+            "is_in_theatres":    False,
             "is_streamable_now": False,
         }
 
