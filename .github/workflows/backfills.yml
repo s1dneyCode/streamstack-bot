@@ -11,6 +11,7 @@ on:
           - streaming
           - popularity
           - popularity-score
+          - vote-count
           - tmdb-scores
           - rt-scores
           - imdb-ids
@@ -79,6 +80,23 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_popularity_score
+
+  backfill-vote-count:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.job == 'vote-count'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill vote count
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_vote_count
 
   backfill-tmdb-scores:
     runs-on: ubuntu-latest

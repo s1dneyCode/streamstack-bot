@@ -147,6 +147,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -199,6 +200,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -243,6 +245,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -287,6 +290,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -331,6 +335,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -375,6 +380,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -419,6 +425,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -463,6 +470,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -507,6 +515,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -551,6 +560,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -606,6 +616,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -661,6 +672,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -715,6 +727,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
@@ -769,6 +782,7 @@ class TmdbClient:
                         "genre": genre_str,
                         "imdb_id": item.get("imdb_id", None),
                         "popularity": item.get("popularity", 0.0),
+                        "vote_count": item.get("vote_count"),
                     }
                 )
 
