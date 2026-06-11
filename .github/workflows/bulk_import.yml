@@ -1,0 +1,26 @@
+name: Bulk Import
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'Number of new titles to insert (max 2000)'
+        required: false
+        default: '500'
+
+jobs:
+  bulk-import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run bulk import
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.bulk_import --batch-size ${{ github.event.inputs.batch_size }}
