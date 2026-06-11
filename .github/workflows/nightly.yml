@@ -2,7 +2,8 @@ name: Nightly Bot
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 6 * * *'      # nightly at 06:00 UTC
+    - cron: '0 6 1 * *'      # monthly cleanup: 1st of each month at 06:00 UTC (03:00 Chile)
   workflow_dispatch:
 
 jobs:
@@ -23,3 +24,19 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           WATCHMODE_API_KEY: ${{ secrets.WATCHMODE_API_KEY }}
         run: python -m bot.main
+
+  monthly-cleanup:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && startsWith(github.event.schedule, '0 6 1')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run monthly cleanup
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.cleanup_low_quality

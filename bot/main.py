@@ -181,6 +181,13 @@ def main() -> None:
         media_type = item["media_type"]
         year = extract_year(item.get("release_date"))
 
+        # --- Runtime filter: skip short films (runtime known and < 40 min) ---
+        if media_type == "movie":
+            runtime = item.get("runtime")
+            if runtime is not None and runtime < 40:
+                print(f"[BOT] Skipping {title}: runtime={runtime}min (short film filter)")
+                continue
+
         # --- RT score from OMDb (includes built-in 1s sleep) -----------
         rt_score = omdb.get_rt_score(title=title, year=year, imdb_id=item.get('imdb_id'))
 
