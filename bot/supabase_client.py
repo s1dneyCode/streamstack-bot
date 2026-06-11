@@ -62,7 +62,13 @@ class SupabaseClient:
         print(f"[Supabase] Upserting media: {media_dict.get('title')} (tmdb_id={media_dict.get('tmdb_id')})")
 
         try:
-            upsert_payload = {**media_dict, "popularity": media_dict.get("popularity", 0.0), "tmdb_score": media_dict.get("tmdb_score", 0), "imdb_id": media_dict.get("imdb_id", None)}
+            popularity = media_dict.get("popularity", 0.0) or 0.0
+            tmdb_score = media_dict.get("tmdb_score", 0) or 0
+            rt_score   = media_dict.get("rt_score", 0) or 0
+            normalized_popularity = min(popularity / 500 * 100, 100)
+            popularity_score = (normalized_popularity * 0.5) + (tmdb_score * 0.3) + (rt_score * 0.2)
+
+            upsert_payload = {**media_dict, "popularity": popularity, "tmdb_score": tmdb_score, "imdb_id": media_dict.get("imdb_id", None), "popularity_score": round(popularity_score, 2)}
             if media_dict.get("media_type") == "movie":
                 upsert_payload["runtime"] = media_dict.get("runtime")
             upsert_payload["title_logo_url"] = media_dict.get("title_logo_url")

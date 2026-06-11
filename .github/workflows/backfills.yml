@@ -10,6 +10,7 @@ on:
         options:
           - streaming
           - popularity
+          - popularity-score
           - tmdb-scores
           - rt-scores
           - imdb-ids
@@ -62,6 +63,22 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_popularity
+
+  backfill-popularity-score:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.job == 'popularity-score'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill popularity score
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_popularity_score
 
   backfill-tmdb-scores:
     runs-on: ubuntu-latest
