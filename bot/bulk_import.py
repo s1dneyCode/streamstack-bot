@@ -80,19 +80,19 @@ def main() -> None:
     popular_tv = tmdb.get_popular_tv(pages=3, genre_map=tv_genre_map)
 
     print("\n[BULK] Step 6: top-rated movies...")
-    top_rated = tmdb.get_top_rated_movies(pages=50, genre_map=movie_genre_map)
+    top_rated = tmdb.get_top_rated_movies(pages=100, genre_map=movie_genre_map)
 
     print("\n[BULK] Step 6b: discover movies (revenue)...")
-    discover_movies_revenue = tmdb.get_discover_movies_by_revenue(pages=50, genre_map=movie_genre_map)
+    discover_movies_revenue = tmdb.get_discover_movies_by_revenue(pages=100, genre_map=movie_genre_map)
 
     print("\n[BULK] Step 6c: discover movies (vote count)...")
-    discover_movies_votes = tmdb.get_discover_movies_by_vote_count(pages=50, genre_map=movie_genre_map)
+    discover_movies_votes = tmdb.get_discover_movies_by_vote_count(pages=100, genre_map=movie_genre_map)
 
     print("\n[BULK] Step 6d: top-rated TV shows...")
-    top_rated_tv = tmdb.get_top_rated_tv(pages=50, genre_map=tv_genre_map)
+    top_rated_tv = tmdb.get_top_rated_tv(pages=100, genre_map=tv_genre_map)
 
     print("\n[BULK] Step 6e: discover TV shows (vote count)...")
-    discover_tv_votes = tmdb.get_discover_tv_by_vote_count(pages=50, genre_map=tv_genre_map)
+    discover_tv_votes = tmdb.get_discover_tv_by_vote_count(pages=100, genre_map=tv_genre_map)
 
     # Genre-based movie endpoints (30 pages each)
     print("\n[BULK] Step 6f: discover movies by genre...")
@@ -114,6 +114,24 @@ def main() -> None:
     genre_tv_action    = tmdb.get_discover_tv_by_genre(10759, "Action & Adventure", pages=30, genre_map=tv_genre_map)
     genre_tv_animation = tmdb.get_discover_tv_by_genre(16,    "Animation",          pages=30, genre_map=tv_genre_map)
 
+    # Year-based movie endpoints (30 pages each)
+    print("\n[BULK] Step 6h: discover movies by year...")
+    year_movies_2023 = tmdb.get_discover_movies_by_year(2023, pages=30, genre_map=movie_genre_map)
+    year_movies_2022 = tmdb.get_discover_movies_by_year(2022, pages=30, genre_map=movie_genre_map)
+    year_movies_2021 = tmdb.get_discover_movies_by_year(2021, pages=30, genre_map=movie_genre_map)
+    year_movies_2020 = tmdb.get_discover_movies_by_year(2020, pages=30, genre_map=movie_genre_map)
+    year_movies_2019 = tmdb.get_discover_movies_by_year(2019, pages=30, genre_map=movie_genre_map)
+    year_movies_2018 = tmdb.get_discover_movies_by_year(2018, pages=30, genre_map=movie_genre_map)
+
+    # Year-based TV endpoints (30 pages each)
+    print("\n[BULK] Step 6i: discover TV shows by year...")
+    year_tv_2023 = tmdb.get_discover_tv_by_year(2023, pages=30, genre_map=tv_genre_map)
+    year_tv_2022 = tmdb.get_discover_tv_by_year(2022, pages=30, genre_map=tv_genre_map)
+    year_tv_2021 = tmdb.get_discover_tv_by_year(2021, pages=30, genre_map=tv_genre_map)
+    year_tv_2020 = tmdb.get_discover_tv_by_year(2020, pages=30, genre_map=tv_genre_map)
+    year_tv_2019 = tmdb.get_discover_tv_by_year(2019, pages=30, genre_map=tv_genre_map)
+    year_tv_2018 = tmdb.get_discover_tv_by_year(2018, pages=30, genre_map=tv_genre_map)
+
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
     # ------------------------------------------------------------------ #
@@ -130,6 +148,10 @@ def main() -> None:
         + genre_movies_thriller + genre_movies_animation
         + genre_tv_drama + genre_tv_comedy + genre_tv_scifi
         + genre_tv_mystery + genre_tv_action + genre_tv_animation
+        + year_movies_2023 + year_movies_2022 + year_movies_2021
+        + year_movies_2020 + year_movies_2019 + year_movies_2018
+        + year_tv_2023 + year_tv_2022 + year_tv_2021
+        + year_tv_2020 + year_tv_2019 + year_tv_2018
     )
 
     for item in all_sources:
