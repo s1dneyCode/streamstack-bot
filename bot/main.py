@@ -369,26 +369,48 @@ def main() -> None:
     print(f"\n[BOT] Done. {total} new titles added, {skipped} skipped (already exist).")
 
     # ------------------------------------------------------------------ #
-    # Step 13 — Update theatrical/streaming states                        #
+    # Step 13 — Update is_in_theatres using now_playing as source of truth #
     # ------------------------------------------------------------------ #
-    print("\n[BOT] Step 13: Updating theatrical and streaming states...")
+    print("\n[BOT] Step 13: Updating is_in_theatres from now_playing list...")
 
-    theatres_count = 0
-    streaming_count = 0
+    now_playing_tmdb_ids = {item["tmdb_id"] for item in now_playing}
 
-    movies_for_theatres = db.get_movies_to_update_theatres(today)
-    for item in movies_for_theatres:
-        db.update_theatres_status(item["id"], is_in_theatres=True, is_streamable_now=False)
-        print(f"[BOT] Step 13 {item['title']}: marked as IN THEATRES")
-        theatres_count += 1
+    # Movies currently flagged as in theatres in the DB
+    currently_in_theatres = (
+        db.client.table("media")
+        .select("id, tmdb_id, title")
+        .eq("media_type", "movie")
+        .eq("is_in_theatres", True)
+        .execute()
+        .data or []
+    )
+    currently_in_theatres_set = {row["tmdb_id"] for row in currently_in_theatres}
 
-    titles_leaving = db.get_titles_leaving_theatres()
-    for item in titles_leaving:
-        db.update_theatres_status(item["id"], is_in_theatres=False, is_streamable_now=True)
-        print(f"[BOT] Step 13 {item['title']}: moved from IN THEATRES to STREAMING")
-        streaming_count += 1
+    # Remove flag from movies no longer in now_playing
+    removed = 0
+    for row in currently_in_theatres:
+        if row["tmdb_id"] not in now_playing_tmdb_ids:
+            db.client.table("media").update({"is_in_theatres": False}).eq("id", row["id"]).execute()
+            print(f"[BOT] Step 13 {row['title']}: removed from IN THEATRES")
+            removed += 1
 
-    print(f"[BOT] Step 13 done. {theatres_count} movies marked in theatres, {streaming_count} titles moved to streaming.")
+    # Add flag to now_playing movies that exist in the DB but aren't flagged yet
+    np_in_db = (
+        db.client.table("media")
+        .select("id, tmdb_id, title")
+        .eq("media_type", "movie")
+        .in_("tmdb_id", list(now_playing_tmdb_ids))
+        .execute()
+        .data or []
+    )
+    added = 0
+    for row in np_in_db:
+        if row["tmdb_id"] not in currently_in_theatres_set:
+            db.client.table("media").update({"is_in_theatres": True}).eq("id", row["id"]).execute()
+            print(f"[BOT] Step 13 {row['title']}: marked IN THEATRES")
+            added += 1
+
+    print(f"[BOT] Step 13 done. {added} movies marked in theatres, {removed} removed from theatres.")
 
     # ------------------------------------------------------------------ #
     # Step 14 — Fetch and store trailers for titles with none             #
