@@ -80,19 +80,39 @@ def main() -> None:
     popular_tv = tmdb.get_popular_tv(pages=3, genre_map=tv_genre_map)
 
     print("\n[BULK] Step 6: top-rated movies...")
-    top_rated = tmdb.get_top_rated_movies(pages=15, genre_map=movie_genre_map)
+    top_rated = tmdb.get_top_rated_movies(pages=50, genre_map=movie_genre_map)
 
     print("\n[BULK] Step 6b: discover movies (revenue)...")
-    discover_movies_revenue = tmdb.get_discover_movies_by_revenue(pages=15, genre_map=movie_genre_map)
+    discover_movies_revenue = tmdb.get_discover_movies_by_revenue(pages=50, genre_map=movie_genre_map)
 
     print("\n[BULK] Step 6c: discover movies (vote count)...")
-    discover_movies_votes = tmdb.get_discover_movies_by_vote_count(pages=15, genre_map=movie_genre_map)
+    discover_movies_votes = tmdb.get_discover_movies_by_vote_count(pages=50, genre_map=movie_genre_map)
 
     print("\n[BULK] Step 6d: top-rated TV shows...")
-    top_rated_tv = tmdb.get_top_rated_tv(pages=15, genre_map=tv_genre_map)
+    top_rated_tv = tmdb.get_top_rated_tv(pages=50, genre_map=tv_genre_map)
 
     print("\n[BULK] Step 6e: discover TV shows (vote count)...")
-    discover_tv_votes = tmdb.get_discover_tv_by_vote_count(pages=15, genre_map=tv_genre_map)
+    discover_tv_votes = tmdb.get_discover_tv_by_vote_count(pages=50, genre_map=tv_genre_map)
+
+    # Genre-based movie endpoints (30 pages each)
+    print("\n[BULK] Step 6f: discover movies by genre...")
+    genre_movies_action    = tmdb.get_discover_movies_by_genre(28,    "Action",    pages=30, genre_map=movie_genre_map)
+    genre_movies_comedy    = tmdb.get_discover_movies_by_genre(35,    "Comedy",    pages=30, genre_map=movie_genre_map)
+    genre_movies_drama     = tmdb.get_discover_movies_by_genre(18,    "Drama",     pages=30, genre_map=movie_genre_map)
+    genre_movies_horror    = tmdb.get_discover_movies_by_genre(27,    "Horror",    pages=30, genre_map=movie_genre_map)
+    genre_movies_scifi     = tmdb.get_discover_movies_by_genre(878,   "Sci-Fi",    pages=30, genre_map=movie_genre_map)
+    genre_movies_romance   = tmdb.get_discover_movies_by_genre(10749, "Romance",   pages=30, genre_map=movie_genre_map)
+    genre_movies_thriller  = tmdb.get_discover_movies_by_genre(53,    "Thriller",  pages=30, genre_map=movie_genre_map)
+    genre_movies_animation = tmdb.get_discover_movies_by_genre(16,    "Animation", pages=30, genre_map=movie_genre_map)
+
+    # Genre-based TV endpoints (30 pages each)
+    print("\n[BULK] Step 6g: discover TV shows by genre...")
+    genre_tv_drama     = tmdb.get_discover_tv_by_genre(18,    "Drama",              pages=30, genre_map=tv_genre_map)
+    genre_tv_comedy    = tmdb.get_discover_tv_by_genre(35,    "Comedy",             pages=30, genre_map=tv_genre_map)
+    genre_tv_scifi     = tmdb.get_discover_tv_by_genre(10765, "Sci-Fi & Fantasy",   pages=30, genre_map=tv_genre_map)
+    genre_tv_mystery   = tmdb.get_discover_tv_by_genre(9648,  "Mystery",            pages=30, genre_map=tv_genre_map)
+    genre_tv_action    = tmdb.get_discover_tv_by_genre(10759, "Action & Adventure", pages=30, genre_map=tv_genre_map)
+    genre_tv_animation = tmdb.get_discover_tv_by_genre(16,    "Animation",          pages=30, genre_map=tv_genre_map)
 
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
@@ -105,6 +125,11 @@ def main() -> None:
         now_playing + on_air + upcoming + popular_movies + popular_tv
         + top_rated + discover_movies_revenue + discover_movies_votes
         + top_rated_tv + discover_tv_votes
+        + genre_movies_action + genre_movies_comedy + genre_movies_drama
+        + genre_movies_horror + genre_movies_scifi + genre_movies_romance
+        + genre_movies_thriller + genre_movies_animation
+        + genre_tv_drama + genre_tv_comedy + genre_tv_scifi
+        + genre_tv_mystery + genre_tv_action + genre_tv_animation
     )
 
     for item in all_sources:
