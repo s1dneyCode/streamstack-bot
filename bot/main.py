@@ -568,6 +568,104 @@ def main() -> None:
 
     print(f"[BOT] Step 16 done. {len(needs_seasons)} shows processed, {step16_seasons} seasons, {step16_episodes} episodes inserted.")
 
+    # ------------------------------------------------------------------ #
+    # Step 17 — Refresh upcoming episode air dates for active series      #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 17: Refreshing episode air dates for active series...")
+
+    # Fetch active TV shows: Returning Series + currently streamable (deduplicated)
+    returning_series = (
+        db.client.table("media")
+        .select("id, tmdb_id, title")
+        .eq("media_type", "tv")
+        .eq("status", "Returning Series")
+        .execute()
+        .data or []
+    )
+    streamable_tv = (
+        db.client.table("media")
+        .select("id, tmdb_id, title")
+        .eq("media_type", "tv")
+        .eq("is_streamable_now", True)
+        .execute()
+        .data or []
+    )
+
+    seen_active: set[str] = set()
+    active_series: list[dict] = []
+    for show in returning_series + streamable_tv:
+        if show["id"] not in seen_active:
+            seen_active.add(show["id"])
+            active_series.append(show)
+
+    active_series = active_series[:50]
+    print(f"[BOT] Step 17: {len(active_series)} active series queued.")
+
+    step17_series   = 0
+    step17_episodes = 0
+
+    for show in active_series:
+        media_id = show["id"]
+        tmdb_id  = show["tmdb_id"]
+        title    = show["title"]
+
+        # Find the latest season stored in our DB for this show
+        latest = (
+            db.client.table("media_seasons")
+            .select("id, season_number")
+            .eq("media_id", media_id)
+            .order("season_number", ascending=False)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not latest:
+            continue
+
+        season_id     = latest[0]["id"]
+        season_number = latest[0]["season_number"]
+
+        # Index current episodes by episode_number for fast lookup
+        current_eps: dict[int, dict] = {
+            row["episode_number"]: row
+            for row in (
+                db.client.table("media_episodes")
+                .select("id, episode_number, air_date")
+                .eq("season_id", season_id)
+                .execute()
+                .data or []
+            )
+        }
+
+        try:
+            fresh_eps = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=season_number)
+        except Exception as exc:
+            print(f"[BOT] Step 17 {title}: fetch failed — {exc}")
+            time.sleep(0.25)
+            continue
+
+        updated = 0
+        for ep in fresh_eps:
+            ep_num   = ep.get("episode_number")
+            new_date = ep.get("air_date")
+            existing = current_eps.get(ep_num)
+
+            if existing is None:
+                db.upsert_episodes(season_id=season_id, episodes=[ep])
+                updated += 1
+            elif existing["air_date"] != new_date:
+                db.client.table("media_episodes").update({"air_date": new_date}).eq("id", existing["id"]).execute()
+                updated += 1
+
+        step17_episodes += updated
+        step17_series   += 1
+        if updated:
+            print(f"[BOT] Step 17 {title}: {updated} episode date(s) refreshed (season {season_number})")
+
+        time.sleep(0.25)
+
+    print(f"[BOT] Step 17 done. {step17_series} series processed, {step17_episodes} episode dates updated.")
+
 
 if __name__ == "__main__":
     main()
