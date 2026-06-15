@@ -48,18 +48,33 @@ def main() -> None:
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
 
-    # Collect media_ids that already have at least one season row
-    season_rows = db.client.table("media_seasons").select("media_id").execute().data or []
-    has_seasons: set[str] = {row["media_id"] for row in season_rows}
+    # Statuses that can still receive new seasons
+    _ACTIVE_STATUSES = {'Returning Series', 'In Production', 'Post Production'}
 
-    # Fetch all TV shows (paginated)
+    # Collect media_ids that already have at least one season row (paginated)
     page_size = 1000
     offset    = 0
+    has_seasons: set[str] = set()
+    while True:
+        batch = (
+            db.client.table("media_seasons")
+            .select("media_id")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data or []
+        )
+        has_seasons.update(row["media_id"] for row in batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    # Fetch all TV shows with status (paginated)
+    offset = 0
     all_tv: list[dict] = []
     while True:
         batch = (
             db.client.table("media")
-            .select("id, tmdb_id, title")
+            .select("id, tmdb_id, title, status")
             .eq("media_type", "tv")
             .range(offset, offset + page_size - 1)
             .execute()
@@ -70,9 +85,19 @@ def main() -> None:
             break
         offset += page_size
 
-    needs_seasons = [row for row in all_tv if row["id"] not in has_seasons]
+    # Apply logic:
+    #   • No seasons yet           → always process
+    #   • Has seasons + active status → process (may have new seasons)
+    #   • Has seasons + ended/canceled → skip
+    needs_seasons = [
+        row for row in all_tv
+        if row["id"] not in has_seasons
+        or row.get("status") in _ACTIVE_STATUSES
+    ]
     total = len(needs_seasons)
-    print(f"[SEASONS] {total} TV shows need seasons backfill.")
+    no_seasons_count = sum(1 for row in needs_seasons if row["id"] not in has_seasons)
+    active_count     = total - no_seasons_count
+    print(f"[SEASONS] {total} TV shows to process ({no_seasons_count} new, {active_count} active status).")
 
     total_seasons  = 0
     total_episodes = 0

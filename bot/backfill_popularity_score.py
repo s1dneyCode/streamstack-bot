@@ -1,13 +1,14 @@
 """
 Backfill: calculate and update popularity_score for all rows in public.media.
 
-Formula (Bayesian weighted):
+Formula (Bayesian weighted + vote-scaled freshness decay):
     normalized_popularity = min(popularity / 500 * 100, 100)
     raw_score = (normalized_popularity * 0.3) + (tmdb_score * 0.5) + (rt_score * 0.2)
-    if vote_count is None or 0:
-        popularity_score = raw_score
-    else:
-        popularity_score = (v / (v + 500)) * raw_score + (500 / (v + 500)) * 72.07
+    bayesian  = (v / (v + 500)) * raw_score + (500 / (v + 500)) * 72.07
+    freshness_scale = min(vote_count / 100, 1.0)   # full boost at 100+ votes
+    freshness = exp(-days_since_release / 365) * freshness_scale
+    popularity_score = bayesian * (0.7 + 0.3 * freshness)
+    # If release_date is None: popularity_score = bayesian * 0.7
 
 Run via:
     python -m bot.backfill_popularity_score
@@ -39,7 +40,7 @@ def fetch_all_rows(db: SupabaseClient) -> list[dict]:
     while True:
         batch = (
             db.client.table("media")
-            .select("id, title, popularity, tmdb_score, rt_score, vote_count")
+            .select("id, title, popularity, tmdb_score, rt_score, vote_count, release_date")
             .range(offset, offset + PAGE_SIZE - 1)
             .execute()
             .data or []
@@ -69,6 +70,7 @@ def main() -> None:
             row.get("tmdb_score"),
             row.get("rt_score"),
             row.get("vote_count"),
+            release_date=row.get("release_date"),
         )
         try:
             db.client.table("media").update({"popularity_score": score}).eq("id", row["id"]).execute()

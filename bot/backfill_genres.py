@@ -1,8 +1,6 @@
 """
 Backfill: populate the genres text-array column for all rows in public.media
-where genres IS NULL or has only one entry (likely incomplete).
-
-Prioritises incomplete data first (NULL rows, then single-genre rows).
+where genres IS NULL or array_length(genres, 1) <= 1 (missing or incomplete).
 
 Run via:
     python -m bot.backfill_genres
@@ -31,27 +29,55 @@ def load_env() -> dict[str, str]:
 
 
 def fetch_targets(db: SupabaseClient) -> list[dict]:
-    """Return all rows where genres IS NULL or array_length <= 1, NULL-rows first."""
+    """Return rows where genres IS NULL or array_length(genres, 1) <= 1.
+
+    Pass 1: DB-side filter for IS NULL.
+    Pass 2: fetch non-null rows with genres included, filter in Python for
+            len <= 1 (PostgREST cannot filter on array_length directly).
+    """
     page_size = 1000
-    null_rows: list[dict] = []
-    thin_rows: list[dict] = []
+    rows: list[dict] = []
+    seen: set[str] = set()
 
-    for bucket, filter_fn in [
-        (null_rows, lambda q: q.is_("genres", "null")),
-        (thin_rows, lambda q: q.filter("genres", "cs", "{}").not_.is_("genres", "null")),
-    ]:
-        offset = 0
-        while True:
-            query = db.client.table("media").select("id, tmdb_id, title, media_type")
-            query = filter_fn(query)
-            batch = query.range(offset, offset + page_size - 1).execute().data or []
-            bucket.extend(batch)
-            if len(batch) < page_size:
-                break
-            offset += page_size
+    # Pass 1: genres IS NULL
+    offset = 0
+    while True:
+        batch = (
+            db.client.table("media")
+            .select("id, tmdb_id, title, media_type")
+            .is_("genres", "null")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data or []
+        )
+        for row in batch:
+            seen.add(row["id"])
+            rows.append(row)
+        if len(batch) < page_size:
+            break
+        offset += page_size
 
-    # Prioritise: NULL first, then single-genre rows
-    return null_rows + [r for r in thin_rows if r["id"] not in {x["id"] for x in null_rows}]
+    # Pass 2: genres IS NOT NULL — Python-filter for array_length <= 1
+    offset = 0
+    while True:
+        batch = (
+            db.client.table("media")
+            .select("id, tmdb_id, title, media_type, genres")
+            .not_.is_("genres", "null")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data or []
+        )
+        for row in batch:
+            if row["id"] not in seen and len(row.get("genres") or []) <= 1:
+                seen.add(row["id"])
+                rows.append({"id": row["id"], "tmdb_id": row["tmdb_id"],
+                             "title": row["title"], "media_type": row["media_type"]})
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    return rows
 
 
 def main() -> None:

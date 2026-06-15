@@ -22,7 +22,7 @@ from datetime import date
 from .tmdb import TmdbClient
 from .omdb import OmdbClient
 from .streaming import StreamingClient
-from .supabase_client import SupabaseClient, compute_popularity_score
+from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES
 from .migrate_images import migrate_poster, migrate_carousel, download_image
 
 
@@ -188,17 +188,29 @@ def main() -> None:
                 print(f"[BOT] Skipping {title}: runtime={runtime}min (short film filter)")
                 continue
 
-        # --- is_limited_series: only available on /tv/{id} detail endpoint ---
+        # --- Detail fetch: status + is_limited_series (TV) ----------------
+        # List endpoints don't return status, so fetch detail for both types.
         is_limited_series = None
+        status = item.get("status")  # None from list endpoints; overridden below
+
         if media_type == "tv":
             try:
                 tv_detail = tmdb._get(f"/tv/{tmdb_id}")
                 is_limited_series = tv_detail.get("type") == "Miniseries"
+                status = tv_detail.get("status")
+            except Exception:
+                pass
+        elif media_type == "movie":
+            try:
+                movie_detail = tmdb._get(f"/movie/{tmdb_id}")
+                status = movie_detail.get("status")
             except Exception:
                 pass
 
-        # --- RT score from OMDb (includes built-in 1s sleep) -----------
-        rt_score = omdb.get_rt_score(title=title, year=year, imdb_id=item.get('imdb_id'))
+        # --- RT score from OMDb — skip for pre-release titles -----------
+        rt_score = None
+        if status not in _PRE_RELEASE_STATUSES:
+            rt_score = omdb.get_rt_score(title=title, year=year, imdb_id=item.get('imdb_id'))
 
         # --- Streaming providers via TMDB watch/providers ---------------
         # Fetched before the upsert so is_streamable_now is set correctly
@@ -228,7 +240,7 @@ def main() -> None:
             "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type),
             "genres":         [g for g in item.get("genre", "").split(", ") if g],
             "vote_count":        item.get("vote_count"),
-            "status":            item.get("status"),
+            "status":            status,
             "original_language": item.get("original_language"),
             "is_documentary":    item.get("is_documentary"),
             "is_limited_series": is_limited_series,
@@ -307,12 +319,13 @@ def main() -> None:
         try:
             detail = tmdb._get(f"/{media_type}/{tmdb_id}")
             popularity = detail.get("popularity", 0.0) or 0.0
-            row = db.client.table("media").select("tmdb_score, rt_score, vote_count").eq("tmdb_id", tmdb_id).maybe_single().execute().data or {}
+            row = db.client.table("media").select("tmdb_score, rt_score, vote_count, release_date").eq("tmdb_id", tmdb_id).maybe_single().execute().data or {}
             popularity_score = compute_popularity_score(
                 popularity,
                 row.get("tmdb_score"),
                 row.get("rt_score"),
                 row.get("vote_count"),
+                release_date=row.get("release_date"),
             )
             db.client.table("media").update({"popularity": popularity, "popularity_score": popularity_score}).eq("tmdb_id", tmdb_id).execute()
             print(f"[BOT] Updated popularity for {title}: {popularity} → score={popularity_score}")
@@ -324,7 +337,11 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Step 11 — Update RT scores for movies due for re-verification       #
     # ------------------------------------------------------------------ #
-    movies_to_update = [item for item in reverify_list if item["media_type"] == "movie"]
+    movies_to_update = [
+        item for item in reverify_list
+        if item["media_type"] == "movie"
+        and item.get("status") not in _PRE_RELEASE_STATUSES
+    ]
     print(f"\n[BOT] Step 11: Updating RT scores for {len(movies_to_update)} movies...")
 
     rt_updated = 0

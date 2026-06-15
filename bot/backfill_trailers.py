@@ -33,28 +33,23 @@ def main() -> None:
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
 
-    # Collect media_ids that already have at least one trailer
-    trailer_rows = db.client.table("media_trailers").select("media_id").execute().data or []
-    has_trailers: set[int] = {row["media_id"] for row in trailer_rows}
-
-    # Fetch all media titles (paginated)
+    # Fetch only titles with no rows in media_trailers (left join + null filter)
     page_size = 1000
     offset    = 0
-    all_media: list[dict] = []
+    needs_trailers: list[dict] = []
     while True:
         batch = (
             db.client.table("media")
-            .select("id, tmdb_id, title, media_type")
+            .select("id, tmdb_id, title, media_type, media_trailers!left(media_id)")
+            .filter("media_trailers.media_id", "is", "null")
             .range(offset, offset + page_size - 1)
             .execute()
             .data or []
         )
-        all_media.extend(batch)
+        needs_trailers.extend(batch)
         if len(batch) < page_size:
             break
         offset += page_size
-
-    needs_trailers = [row for row in all_media if row["id"] not in has_trailers]
     total = len(needs_trailers)
     print(f"[TRAILERS] {total} titles need trailer backfill.")
 

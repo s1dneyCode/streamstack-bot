@@ -102,7 +102,7 @@ def main() -> None:
         response = (
             db.client.table("media")
             .select("id, tmdb_id, title, media_type, poster_path")
-            .is_("poster_url", "null")
+            .or_("poster_url.is.null,poster_url.like.https://image.tmdb.org%")
             .range(offset, offset + page_size - 1)
             .execute()
         )

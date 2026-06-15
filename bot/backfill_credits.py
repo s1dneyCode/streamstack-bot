@@ -72,31 +72,29 @@ def main() -> None:
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
 
-    # When running --role producer, process ALL titles regardless of existing credits
-    if not producer_only:
-        credit_rows = db.client.table("media_credits").select("media_id").execute().data or []
-        has_credits: set[str] = {row["media_id"] for row in credit_rows}
-    else:
-        has_credits = set()  # not used in producer_only mode
-
-    # Fetch media titles (paginated), optionally filtered by media_type
+    # Fetch media titles (paginated), optionally filtered by media_type.
+    # Default mode: left join to skip titles that already have credits.
+    # producer_only mode: process all titles regardless of existing credits.
     page_size = 1000
     offset    = 0
-    all_media: list[dict] = []
+    targets: list[dict] = []
+
     while True:
-        query = db.client.table("media").select("id, tmdb_id, title, media_type")
+        if producer_only:
+            query = db.client.table("media").select("id, tmdb_id, title, media_type")
+        else:
+            query = (
+                db.client.table("media")
+                .select("id, tmdb_id, title, media_type, media_credits!left(media_id)")
+                .filter("media_credits.media_id", "is", "null")
+            )
         if media_type_filter:
             query = query.eq("media_type", media_type_filter)
         batch = query.range(offset, offset + page_size - 1).execute().data or []
-        all_media.extend(batch)
+        targets.extend(batch)
         if len(batch) < page_size:
             break
         offset += page_size
-
-    if producer_only:
-        targets = all_media
-    else:
-        targets = [row for row in all_media if row["id"] not in has_credits]
 
     total = len(targets)
     print(f"[CREDITS] {total} titles to process.")
