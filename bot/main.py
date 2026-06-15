@@ -232,7 +232,7 @@ def main() -> None:
             db.client.table("media")
             .select("id")
             .eq("tmdb_id", tmdb_id)
-            .single()
+            .maybe_single()
             .execute()
         )
         media_uuid = result.data.get("id") if result.data else None
@@ -295,7 +295,7 @@ def main() -> None:
         try:
             detail = tmdb._get(f"/{media_type}/{tmdb_id}")
             popularity = detail.get("popularity", 0.0) or 0.0
-            row = db.client.table("media").select("tmdb_score, rt_score, vote_count").eq("tmdb_id", tmdb_id).single().execute().data or {}
+            row = db.client.table("media").select("tmdb_score, rt_score, vote_count").eq("tmdb_id", tmdb_id).maybe_single().execute().data or {}
             popularity_score = compute_popularity_score(
                 popularity,
                 row.get("tmdb_score"),
@@ -325,7 +325,7 @@ def main() -> None:
             db.client.table("media")
             .select("rt_score, imdb_id")
             .eq("tmdb_id", tmdb_id)
-            .single()
+            .maybe_single()
             .execute()
         )
         current_score = current.data.get("rt_score") if current.data else None

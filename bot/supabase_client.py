@@ -99,7 +99,7 @@ class SupabaseClient:
                 self.client.table("media")
                 .select("id")
                 .eq("tmdb_id", media_dict["tmdb_id"])
-                .single()
+                .maybe_single()
                 .execute()
             )
 
