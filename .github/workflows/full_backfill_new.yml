@@ -1,11 +1,11 @@
-name: Full Backfill
+name: Full Backfill — New Data
 
 on:
   workflow_dispatch:
 
 jobs:
-  full-backfill:
-    runs-on: ubuntu-latest
+  full-backfill-new:
+    runs-on: self-hosted
     env:
       PYTHONUNBUFFERED: '1'
     steps:
@@ -16,44 +16,45 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: 1 - Backfill runtime
+      - name: 1 - Migrate images
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_runtime
+        run: python -m bot.migrate_images
 
-      - name: 2 - Backfill vote count
+      - name: 2 - Backfill trailers
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_vote_count
+        run: python -m bot.backfill_trailers
 
-      - name: 3 - Backfill popularity score
-        continue-on-error: true
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_popularity_score
-
-      - name: 4 - Backfill status
+      - name: 3 - Backfill credits
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_status
+        run: python -m bot.backfill_credits
 
-      - name: 5 - Backfill genres
+      - name: 4 - Backfill seasons
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_genres
+        run: python -m bot.backfill_seasons
+
+      - name: 5 - Backfill title logos
+        continue-on-error: true
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_title_logos
 
       - name: 6 - Backfill certifications
         continue-on-error: true
@@ -63,47 +64,23 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_certifications
 
-      - name: 7 - Backfill title logos
+      - name: 7 - Backfill runtime
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_title_logos
+        run: python -m bot.backfill_runtime
 
-      - name: 8 - Backfill trailers
+      - name: 8 - Backfill genres
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_trailers
+        run: python -m bot.backfill_genres
 
-      - name: 9 - Backfill credits
-        continue-on-error: true
-        env:
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_credits
-
-      - name: 10 - Backfill seasons
-        continue-on-error: true
-        env:
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_seasons
-
-      - name: 11 - Migrate images
-        continue-on-error: true
-        env:
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.migrate_images
-
-      - name: 12 - Backfill metadata
+      - name: 9 - Backfill metadata
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -111,7 +88,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_metadata
 
-      - name: 13 - Backfill states
+      - name: 10 - Backfill states
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

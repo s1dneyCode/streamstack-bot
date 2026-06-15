@@ -4,7 +4,7 @@ StreamStack Bot — entry point.
 Orchestrates the nightly pipeline:
   1. Fetch currently playing / on-air titles from TMDB.
   2. Deduplicate against what is already stored in Supabase.
-  3. Enrich NEW titles only with RT scores (OMDb) and streaming info (TMDB).
+  3. Enrich NEW titles with TMDB detail data (status, genres, certifications, etc.).
   4. Persist everything to Supabase.
 
 Run locally (requires env vars to be set in the shell):
@@ -21,9 +21,7 @@ from datetime import date
 
 from .tmdb import TmdbClient
 from .omdb import OmdbClient
-from .streaming import StreamingClient
 from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES
-from .migrate_images import migrate_poster, migrate_carousel, download_image
 
 
 def load_env() -> dict[str, str]:
@@ -32,7 +30,7 @@ def load_env() -> dict[str, str]:
     any are missing.  Failing fast here is preferable to an obscure error deep
     inside an API client.
     """
-    required = ["TMDB_API_KEY", "OMDB_API_KEY", "SUPABASE_URL", "SUPABASE_KEY", "WATCHMODE_API_KEY"]
+    required = ["TMDB_API_KEY", "OMDB_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
     config: dict[str, str] = {}
 
     for key in required:
@@ -65,7 +63,6 @@ def main() -> None:
 
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
     omdb = OmdbClient(api_key=config["OMDB_API_KEY"])
-    streaming = StreamingClient(api_key=config["WATCHMODE_API_KEY"])
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
     print("[BOT] Fetching genre maps from TMDB...")
@@ -191,135 +188,77 @@ def main() -> None:
     total = len(new_items)
 
     for index, item in enumerate(new_items, start=1):
-        title = item["title"]
-        tmdb_id = item["tmdb_id"]
+        title      = item["title"]
+        tmdb_id    = item["tmdb_id"]
         media_type = item["media_type"]
-        year = extract_year(item.get("release_date"))
 
-        # --- Runtime filter: skip short films (runtime known and < 40 min) ---
-        if media_type == "movie":
-            runtime = item.get("runtime")
-            if runtime is not None and runtime < 40:
-                print(f"[BOT] Skipping {title}: runtime={runtime}min (short film filter)")
-                continue
-
-        # --- Detail fetch: status + is_limited_series (TV) ----------------
-        # List endpoints don't return status, so fetch detail for both types.
+        # --- Fetch full detail from TMDB --------------------------------
         is_limited_series = None
-        status = item.get("status")  # None from list endpoints; overridden below
+        status            = None
+        runtime           = item.get("runtime")
+        vote_count        = item.get("vote_count")
+        original_language = item.get("original_language")
+        is_documentary    = item.get("is_documentary", False)
+        genres            = [g for g in item.get("genre", "").split(", ") if g]
 
         if media_type == "tv":
             try:
-                tv_detail = tmdb._get(f"/tv/{tmdb_id}")
-                is_limited_series = tv_detail.get("type") == "Miniseries"
-                status = tv_detail.get("status")
+                detail = tmdb._get(f"/tv/{tmdb_id}")
+                is_limited_series = detail.get("type") == "Miniseries"
+                status            = detail.get("status")
+                vote_count        = detail.get("vote_count")
+                original_language = detail.get("original_language")
+                is_documentary    = 99 in [g["id"] for g in detail.get("genres", [])]
+                genres            = [g["name"] for g in detail.get("genres", []) if g.get("name")]
             except Exception:
                 pass
-        elif media_type == "movie":
+        else:
             try:
-                movie_detail = tmdb._get(f"/movie/{tmdb_id}")
-                status = movie_detail.get("status")
+                detail = tmdb._get(f"/movie/{tmdb_id}")
+                status            = detail.get("status")
+                runtime           = detail.get("runtime")
+                vote_count        = detail.get("vote_count")
+                original_language = detail.get("original_language")
+                is_documentary    = 99 in [g["id"] for g in detail.get("genres", [])]
+                genres            = [g["name"] for g in detail.get("genres", []) if g.get("name")]
             except Exception:
                 pass
 
-        # --- RT score from OMDb — skip for pre-release titles -----------
-        rt_score = None
-        if status not in _PRE_RELEASE_STATUSES:
-            rt_score = omdb.get_rt_score(title=title, year=year, imdb_id=item.get('imdb_id'))
+        # --- Runtime filter: skip short films ---------------------------
+        if media_type == "movie" and runtime is not None and runtime < 40:
+            print(f"[BOT] Skipping {title}: runtime={runtime}min (short film filter)")
+            continue
 
-        # --- Streaming providers via TMDB watch/providers ---------------
-        # Fetched before the upsert so is_streamable_now is set correctly
-        providers = streaming.get_streaming_providers(
-            tmdb_id=tmdb_id,
-            media_type=media_type,
-        )
-
-        # --- Build the media record to upsert ---------------------------
+        # --- Build and persist the media record -------------------------
         media_record = {
-            "tmdb_id": tmdb_id,
-            "title": title,
-            "overview": item.get("overview"),
-            "poster_path": item.get("poster_path"),
-            "media_type": media_type,
+            "tmdb_id":      tmdb_id,
+            "title":        title,
+            "overview":     item.get("overview"),
+            "poster_path":  item.get("poster_path"),
+            "media_type":   media_type,
             "release_date": item.get("release_date"),
-            "rt_score": rt_score,
-            # is_in_theatres is always False for now
-            "is_in_theatres": False,
-            # A title is considered "streamable now" if at least one
-            # subscription service carries it in the US
-            "is_streamable_now": len(providers) > 0,
-            "popularity": item.get("popularity", 0.0),
-            "imdb_id": item.get("imdb_id"),
-            "runtime": item.get("runtime"),
+            "is_in_theatres":    False,
+            "is_streamable_now": False,
+            "popularity":   item.get("popularity", 0.0),
+            "imdb_id":      item.get("imdb_id"),
+            "runtime":      runtime,
             "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type),
             "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type),
-            "genres":         [g for g in item.get("genre", "").split(", ") if g],
-            "vote_count":        item.get("vote_count"),
-            "status":            status,
-            "original_language": item.get("original_language"),
-            "is_documentary":    item.get("is_documentary"),
+            "genres":         genres,
+            "vote_count":     vote_count,
+            "status":         status,
+            "original_language": original_language,
+            "is_documentary":    is_documentary,
             "is_limited_series": is_limited_series,
         }
 
-        # --- Persist media row to Supabase ------------------------------
         db.upsert_media(media_record)
+        print(f"[BOT] Step 9 {index}/{total}: {title} (status={status or 'unknown'})")
 
-        # --- Fetch Supabase UUID then save streaming availability -------
-        # Query the UUID after upsert rather than relying on the upsert
-        # return value, which is not reliable across supabase-py versions
-        result = (
-            db.client.table("media")
-            .select("id")
-            .eq("tmdb_id", tmdb_id)
-            .maybe_single()
-            .execute()
-        )
-        media_uuid = result.data.get("id") if result.data else None
-
-        print(f"[BOT] Providers for {title}: {providers}")
-
-        if providers and media_uuid:
-            db.upsert_streaming_availability(media_id=media_uuid, providers=providers)
-
-        # --- Image migration: poster and carousel -----------------------
-        try:
-            migrate_poster(db, tmdb_id, title, item.get("poster_path", ""))
-            migrate_carousel(db, tmdb, tmdb_id, title, media_type)
-        except Exception as exc:
-            print(f"[BOT] Image migration failed for {title}: {exc}")
-
-        # --- Progress log -----------------------------------------------
-        score_str = f"{rt_score}%" if rt_score is not None else "N/A"
-        print(f"[BOT] Processed {index}/{total}: {title} ({score_str})")
-
-    # ------------------------------------------------------------------ #
-    # Step 10 — Re-verify streaming providers for existing titles         #
-    # ------------------------------------------------------------------ #
+    # Load reverify list for Steps 10b and 11
     today = date.today()
     reverify_list = db.get_titles_to_reverify(today)
-    print(f"\n[BOT] Step 10: Re-verifying streaming providers for {len(reverify_list)} existing titles...")
-
-    reverified = 0
-    for item in reverify_list:
-        media_id   = item["id"]
-        tmdb_id    = item["tmdb_id"]
-        title      = item["title"]
-        media_type = item["media_type"]
-
-        providers = streaming.get_streaming_providers(tmdb_id=tmdb_id, media_type=media_type)
-
-        if providers:
-            # Only replace existing data when we have confirmed new results —
-            # prevents wiping providers due to API failures or empty responses
-            db.delete_streaming_providers(media_id)
-            db.upsert_streaming_availability(media_id=media_id, providers=providers)
-
-        db.update_streaming_last_checked(media_id)
-        reverified += 1
-
-        print(f"[BOT] Re-verified {title}: {providers if providers else '(no results — kept existing data)'}")
-
-    print(f"[BOT] Re-verification done. {reverified} titles updated.")
+    print(f"\n[BOT] {len(reverify_list)} titles queued for periodic score and popularity updates.")
 
     # ------------------------------------------------------------------ #
     # Step 10b — Update popularity for titles due for re-verification      #
@@ -464,153 +403,75 @@ def main() -> None:
     print(f"[BOT] Step 13 done. {added} movies marked in theatres, {removed} removed from theatres.")
 
     # ------------------------------------------------------------------ #
-    # Step 14 — Fetch and store trailers for titles with none             #
+    # Step 14 — Check for new seasons on Returning Series                 #
     # ------------------------------------------------------------------ #
-    print("\n[BOT] Step 14: Fetching trailers for titles with no trailers...")
+    print("\n[BOT] Step 14: Checking for new seasons on Returning Series...")
 
-    trailer_media_ids: set[int] = {
-        row["media_id"]
-        for row in (db.client.table("media_trailers").select("media_id").execute().data or [])
-    }
+    returning_for_seasons = (
+        db.client.table("media")
+        .select("id, tmdb_id, title")
+        .eq("media_type", "tv")
+        .eq("status", "Returning Series")
+        .execute()
+        .data or []
+    )
 
-    page_size = 1000
-    offset = 0
-    all_titles: list[dict] = []
-    while True:
-        batch = (
-            db.client.table("media")
-            .select("id, tmdb_id, title, media_type")
-            .range(offset, offset + page_size - 1)
+    step14_shows_updated = 0
+    step14_new_seasons   = 0
+    step14_new_episodes  = 0
+
+    for show in returning_for_seasons:
+        media_id = show["id"]
+        tmdb_id  = show["tmdb_id"]
+        title    = show["title"]
+
+        try:
+            tmdb_seasons = tmdb.get_seasons(tmdb_id=tmdb_id)
+        except Exception as exc:
+            print(f"[BOT] Step 14 {title}: fetch failed — {exc}")
+            time.sleep(0.25)
+            continue
+
+        if not tmdb_seasons:
+            time.sleep(0.25)
+            continue
+
+        tmdb_season_numbers = {s["season_number"] for s in tmdb_seasons}
+
+        stored = (
+            db.client.table("media_seasons")
+            .select("season_number")
+            .eq("media_id", media_id)
             .execute()
             .data or []
         )
-        all_titles.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
+        stored_season_numbers = {r["season_number"] for r in stored}
+        new_season_numbers    = tmdb_season_numbers - stored_season_numbers
 
-    needs_trailers = [t for t in all_titles if t["id"] not in trailer_media_ids][:50]
+        if not new_season_numbers:
+            time.sleep(0.25)
+            continue
 
-    step14_trailers = 0
-    for item in needs_trailers:
-        videos = tmdb.get_videos(tmdb_id=item["tmdb_id"], media_type=item["media_type"])
-        count  = db.upsert_trailers(media_id=item["id"], trailers=videos)
-        step14_trailers += count
-        print(f"[BOT] Step 14 {item['title']}: {count} trailer(s) added")
-        time.sleep(0.25)
+        new_seasons_data = [s for s in tmdb_seasons if s["season_number"] in new_season_numbers]
+        season_rows      = db.upsert_seasons(media_id=media_id, seasons=new_seasons_data)
+        season_map       = {r["season_number"]: r["id"] for r in season_rows}
 
-    print(f"[BOT] Step 14 done. {len(needs_trailers)} titles processed, {step14_trailers} trailers added.")
-
-    # ------------------------------------------------------------------ #
-    # Step 15 — Fetch and store credits for titles with none              #
-    # ------------------------------------------------------------------ #
-    print("\n[BOT] Step 15: Fetching credits for titles with no credits...")
-
-    credit_media_ids: set[str] = {
-        row["media_id"]
-        for row in (db.client.table("media_credits").select("media_id").execute().data or [])
-    }
-
-    offset = 0
-    all_titles_for_credits: list[dict] = []
-    while True:
-        batch = (
-            db.client.table("media")
-            .select("id, tmdb_id, title, media_type")
-            .range(offset, offset + page_size - 1)
-            .execute()
-            .data or []
-        )
-        all_titles_for_credits.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
-
-    needs_credits = [t for t in all_titles_for_credits if t["id"] not in credit_media_ids][:50]
-
-    step15_credits = 0
-    for item in needs_credits:
-        result = tmdb.get_credits(tmdb_id=item["tmdb_id"], media_type=item["media_type"])
-        count = db.upsert_credits(
-            media_id=item["id"],
-            directors=result["directors"],
-            writers=result["writers"],
-            cast=result["cast"],
-            created_by=result["created_by"],
-            producers=result["producers"],
-        )
-        step15_credits += count
-        print(f"[BOT] Step 15 {item['title']}: {count} credit(s) added")
-        time.sleep(0.25)
-
-    print(f"[BOT] Step 15 done. {len(needs_credits)} titles processed, {step15_credits} credits inserted.")
-
-    # ------------------------------------------------------------------ #
-    # Step 16 — Fetch and store seasons + episodes for TV shows           #
-    # ------------------------------------------------------------------ #
-    print("\n[BOT] Step 16: Fetching seasons and episodes for TV shows with none...")
-
-    season_media_ids: set[str] = {
-        row["media_id"]
-        for row in (db.client.table("media_seasons").select("media_id").execute().data or [])
-    }
-
-    offset = 0
-    all_tv: list[dict] = []
-    while True:
-        batch = (
-            db.client.table("media")
-            .select("id, tmdb_id, title")
-            .eq("media_type", "tv")
-            .range(offset, offset + page_size - 1)
-            .execute()
-            .data or []
-        )
-        all_tv.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
-
-    needs_seasons = [t for t in all_tv if t["id"] not in season_media_ids][:20]
-
-    step16_seasons  = 0
-    step16_episodes = 0
-
-    for item in needs_seasons:
-        seasons_raw = tmdb.get_seasons(tmdb_id=item["tmdb_id"])
-
-        # Download and upload season posters
-        for s in seasons_raw:
-            poster_path = s.get("poster_path", "")
-            if poster_path:
-                img = download_image(f"https://image.tmdb.org/t/p/w500{poster_path}")
-                if img:
-                    url = db.upload_image(
-                        "media-images",
-                        f"seasons/{item['tmdb_id']}/{s['season_number']}.jpg",
-                        img,
-                    )
-                    s["poster_url"] = url
-
-        season_rows = db.upsert_seasons(media_id=item["id"], seasons=seasons_raw)
-        step16_seasons += len(season_rows)
-
-        season_map = {r["season_number"]: r["id"] for r in season_rows}
-        for s in seasons_raw:
+        eps_inserted = 0
+        for s in new_seasons_data:
             season_id = season_map.get(s["season_number"])
             if not season_id:
                 continue
-            episodes = tmdb.get_season_episodes(
-                tmdb_id=item["tmdb_id"], season_number=s["season_number"]
-            )
-            step16_episodes += db.upsert_episodes(season_id=season_id, episodes=episodes)
+            episodes = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=s["season_number"])
+            eps_inserted += db.upsert_episodes(season_id=season_id, episodes=episodes)
             time.sleep(0.25)
 
-        db.update_tv_runtime(media_id=item["id"])
-        print(f"[BOT] Step 16 {item['title']}: {len(season_rows)} seasons")
+        step14_shows_updated += 1
+        step14_new_seasons   += len(new_seasons_data)
+        step14_new_episodes  += eps_inserted
+        print(f"[BOT] Step 14 {title}: {len(new_seasons_data)} new season(s), {eps_inserted} episodes")
         time.sleep(0.5)
 
-    print(f"[BOT] Step 16 done. {len(needs_seasons)} shows processed, {step16_seasons} seasons, {step16_episodes} episodes inserted.")
+    print(f"[BOT] Step 14 done. {step14_shows_updated} shows updated, {step14_new_seasons} new seasons, {step14_new_episodes} new episodes.")
 
     # ------------------------------------------------------------------ #
     # Step 17 — Refresh upcoming episode air dates for active series      #
