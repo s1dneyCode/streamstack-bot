@@ -80,11 +80,25 @@ def main() -> None:
     print(f"[BOT] Fetched {len(now_playing)} now-playing movies.")
 
     # ------------------------------------------------------------------ #
+    # Step 1b — Fetch trending movies this week from TMDB                 #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 1b: Fetching trending movies (week) from TMDB...")
+    trending_movies = tmdb.get_trending_movies(pages=3, genre_map=movie_genre_map)
+    print(f"[BOT] Fetched {len(trending_movies)} trending movies.")
+
+    # ------------------------------------------------------------------ #
     # Step 2 — Fetch on-air TV shows from TMDB                            #
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 2: Fetching on-air TV shows from TMDB...")
     on_air = tmdb.get_on_air_tv(pages=3, genre_map=tv_genre_map)
     print(f"[BOT] Fetched {len(on_air)} on-air TV shows.")
+
+    # ------------------------------------------------------------------ #
+    # Step 2b — Fetch trending TV shows this week from TMDB               #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 2b: Fetching trending TV shows (week) from TMDB...")
+    trending_tv = tmdb.get_trending_tv(pages=3, genre_map=tv_genre_map)
+    print(f"[BOT] Fetched {len(trending_tv)} trending TV shows.")
 
     # ------------------------------------------------------------------ #
     # Step 3 — Fetch upcoming movies from TMDB                            #
@@ -149,7 +163,8 @@ def main() -> None:
     combined: list[dict] = []
     seen_ids: set[int] = set()
 
-    for item in (now_playing + on_air + upcoming + popular_movies + popular_tv + top_rated
+    for item in (now_playing + trending_movies + on_air + trending_tv + upcoming
+                 + popular_movies + popular_tv + top_rated
                  + discover_movies_revenue + discover_movies_votes + top_rated_tv + discover_tv_votes):
         tid = item["tmdb_id"]
         if tid not in seen_ids:
