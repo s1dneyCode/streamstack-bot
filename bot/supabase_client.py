@@ -88,9 +88,12 @@ class SupabaseClient:
             upsert_payload = {**media_dict, "popularity": popularity, "tmdb_score": tmdb_score, "imdb_id": media_dict.get("imdb_id", None), "vote_count": vote_count, "status": media_dict.get("status"), "popularity_score": popularity_score}
             if media_dict.get("media_type") == "movie":
                 upsert_payload["runtime"] = media_dict.get("runtime")
-            upsert_payload["title_logo_url"] = media_dict.get("title_logo_url")
-            upsert_payload["certification"]  = media_dict.get("certification")
-            upsert_payload["genres"]         = media_dict.get("genres") or []
+            upsert_payload["title_logo_url"]    = media_dict.get("title_logo_url")
+            upsert_payload["certification"]     = media_dict.get("certification")
+            upsert_payload["genres"]            = media_dict.get("genres") or []
+            upsert_payload["original_language"] = media_dict.get("original_language")
+            upsert_payload["is_documentary"]    = media_dict.get("is_documentary")
+            upsert_payload["is_limited_series"] = media_dict.get("is_limited_series")
             self.client.table("media").upsert(upsert_payload, on_conflict="tmdb_id").execute()
 
             # Fetch the row id in a separate query — chaining .select() after

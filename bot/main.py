@@ -188,6 +188,15 @@ def main() -> None:
                 print(f"[BOT] Skipping {title}: runtime={runtime}min (short film filter)")
                 continue
 
+        # --- is_limited_series: only available on /tv/{id} detail endpoint ---
+        is_limited_series = None
+        if media_type == "tv":
+            try:
+                tv_detail = tmdb._get(f"/tv/{tmdb_id}")
+                is_limited_series = tv_detail.get("type") == "Miniseries"
+            except Exception:
+                pass
+
         # --- RT score from OMDb (includes built-in 1s sleep) -----------
         rt_score = omdb.get_rt_score(title=title, year=year, imdb_id=item.get('imdb_id'))
 
@@ -218,8 +227,11 @@ def main() -> None:
             "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type),
             "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type),
             "genres":         [g for g in item.get("genre", "").split(", ") if g],
-            "vote_count":     item.get("vote_count"),
-            "status":         item.get("status"),
+            "vote_count":        item.get("vote_count"),
+            "status":            item.get("status"),
+            "original_language": item.get("original_language"),
+            "is_documentary":    item.get("is_documentary"),
+            "is_limited_series": is_limited_series,
         }
 
         # --- Persist media row to Supabase ------------------------------

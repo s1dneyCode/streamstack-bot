@@ -150,6 +150,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -205,6 +207,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -252,6 +256,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -299,6 +305,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -346,6 +354,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -393,6 +403,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -440,6 +452,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -487,6 +501,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -534,6 +550,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -581,6 +599,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -639,6 +659,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -697,6 +719,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -754,6 +778,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
@@ -811,6 +837,8 @@ class TmdbClient:
                         "vote_count":        item.get("vote_count"),
                         "status":            item.get("status"),
                         "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
                     }
                 )
 
