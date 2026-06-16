@@ -1,0 +1,25 @@
+name: Nightly Enrichment
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # 9AM UTC = 6AM Chile, 3h after main nightly bot
+  workflow_dispatch:
+
+jobs:
+  enrich:
+    runs-on: self-hosted
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Enrich new titles
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.enrich_new_titles
