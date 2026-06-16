@@ -461,7 +461,7 @@ def main() -> None:
             season_id = season_map.get(s["season_number"])
             if not season_id:
                 continue
-            episodes = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=s["season_number"])
+            _, episodes = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=s["season_number"])
             eps_inserted += db.upsert_episodes(season_id=season_id, episodes=episodes)
             time.sleep(0.25)
 
@@ -543,7 +543,7 @@ def main() -> None:
         }
 
         try:
-            fresh_eps = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=season_number)
+            _, fresh_eps = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=season_number)
         except Exception as exc:
             print(f"[BOT] Step 17 {title}: fetch failed — {exc}")
             time.sleep(0.25)

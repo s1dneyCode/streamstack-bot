@@ -1027,14 +1027,20 @@ class TmdbClient:
             return []
         return [s for s in data.get("seasons", []) if s.get("season_number", 0) != 0]
 
-    def get_season_episodes(self, tmdb_id: int, season_number: int) -> list[dict]:
-        """Return episodes for a specific season with episode_number, name, runtime, air_date."""
+    def get_season_episodes(
+        self, tmdb_id: int, season_number: int
+    ) -> tuple[float | None, list[dict]]:
+        """Return (vote_average, episodes) for a specific season.
+
+        vote_average is the season-level rating from TMDB.
+        episodes contain episode_number, name, runtime, air_date.
+        """
         try:
             data = self._get(f"/tv/{tmdb_id}/season/{season_number}")
         except Exception as exc:
             print(f"[TMDB] Could not fetch season {season_number} for tv/{tmdb_id}: {exc}")
-            return []
-        return [
+            return None, []
+        episodes = [
             {
                 "episode_number": ep.get("episode_number"),
                 "name":           ep.get("name", ""),
@@ -1043,6 +1049,7 @@ class TmdbClient:
             }
             for ep in data.get("episodes", [])
         ]
+        return data.get("vote_average"), episodes
 
     def get_certification(self, tmdb_id: int, media_type: str) -> str | None:
         """

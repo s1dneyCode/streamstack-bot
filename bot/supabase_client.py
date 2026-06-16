@@ -203,6 +203,7 @@ class SupabaseClient:
                 "episode_count": s.get("episode_count"),
                 "air_date":      s.get("air_date") or None,
                 "poster_url":    s.get("poster_url"),
+                "vote_average":  s.get("vote_average"),
             }
             for s in seasons
         ]

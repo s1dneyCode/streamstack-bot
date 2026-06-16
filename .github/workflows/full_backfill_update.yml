@@ -55,7 +55,15 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_tmdb_scores
 
-      - name: 6 - Backfill RT scores
+      - name: 6 - Backfill season ratings
+        continue-on-error: true
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_season_ratings
+
+      - name: 7 - Backfill RT scores
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -64,7 +72,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_rt_scores
 
-      - name: 7 - Backfill IMDb IDs
+      - name: 8 - Backfill IMDb IDs
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -72,7 +80,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_imdb_ids
 
-      - name: 8 - Backfill streaming
+      - name: 9 - Backfill streaming
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}

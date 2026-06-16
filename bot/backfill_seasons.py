@@ -143,7 +143,7 @@ def main() -> None:
             season_id = season_map.get(s["season_number"])
             if not season_id:
                 continue
-            episodes = tmdb.get_season_episodes(
+            _, episodes = tmdb.get_season_episodes(
                 tmdb_id=tmdb_id, season_number=s["season_number"]
             )
             n = db.upsert_episodes(season_id=season_id, episodes=episodes)
