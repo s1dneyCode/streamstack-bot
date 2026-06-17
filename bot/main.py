@@ -22,7 +22,7 @@ from datetime import date
 
 from .tmdb import TmdbClient
 from .omdb import OmdbClient
-from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES
+from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES, ALLOWED_PROVIDERS
 
 
 def load_env() -> dict[str, str]:
@@ -237,8 +237,9 @@ def main() -> None:
             continue
 
         # --- Watch providers via TMDB watch/providers --------------------
-        watch_providers   = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
-        is_streamable_now = bool(watch_providers)
+        watch_providers    = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+        watch_providers    = [p for p in watch_providers if p in ALLOWED_PROVIDERS]
+        is_streamable_now  = bool(watch_providers)
 
         # --- Build and persist the media record -------------------------
         media_record = {
@@ -289,6 +290,7 @@ def main() -> None:
         media_type = item["media_type"]
 
         providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+        providers = [p for p in providers if p in ALLOWED_PROVIDERS]
 
         if providers:
             db.delete_streaming_providers(media_id)

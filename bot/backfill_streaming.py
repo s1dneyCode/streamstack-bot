@@ -2,9 +2,10 @@
 Backfill: refresh streaming availability for every title in public.media
 using TMDB's /movie|tv/{id}/watch/providers endpoint.
 
-Only flatrate (subscription) providers are extracted. Processes all
-titles (not just ones missing data) so dropped providers stay in sync,
-and updates is_streamable_now accordingly.
+Only flatrate (subscription) providers are extracted, filtered down to
+ALLOWED_PROVIDERS. Processes all titles (not just ones missing data)
+so dropped providers stay in sync, and updates is_streamable_now
+accordingly.
 
 Run manually:
     python -m bot.backfill_streaming
@@ -15,7 +16,7 @@ import sys
 import time
 
 from .tmdb import TmdbClient
-from .supabase_client import SupabaseClient
+from .supabase_client import SupabaseClient, ALLOWED_PROVIDERS
 
 
 def load_env() -> dict[str, str]:
@@ -73,6 +74,7 @@ def main() -> None:
         media_type = row["media_type"]
 
         providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+        providers = [p for p in providers if p in ALLOWED_PROVIDERS]
 
         if providers:
             db.delete_streaming_providers(media_id)

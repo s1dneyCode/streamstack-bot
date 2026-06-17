@@ -39,6 +39,21 @@ _BAYES_C = 72.07  # global mean score
 
 _PRE_RELEASE_STATUSES = frozenset({'In Production', 'Post Production', 'Planned', 'Rumored'})
 
+ALLOWED_PROVIDERS = frozenset({
+    'Netflix', 'Netflix Standard with Ads',
+    'Amazon Prime Video', 'Amazon Prime Video with Ads',
+    'HBO Max', 'HBO Max Amazon Channel',
+    'Disney Plus',
+    'Hulu',
+    'Paramount Plus Premium', 'Paramount Plus Essential',
+    'Paramount+ Amazon Channel', 'Paramount+ Roku Premium Channel',
+    'Paramount Plus Apple TV Channel',
+    'Peacock Premium', 'Peacock Premium Plus',
+    'Apple TV Plus',
+    'Crunchyroll', 'Crunchyroll Amazon Channel',
+    'AMC+', 'AMC+ Amazon Channel', 'AMC Plus Apple TV Channel',
+})
+
 
 def compute_popularity_score(
     popularity: float,
