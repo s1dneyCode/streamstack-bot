@@ -4,7 +4,8 @@ StreamStack Bot — entry point.
 Orchestrates the nightly pipeline:
   1. Fetch currently playing / on-air titles from TMDB.
   2. Deduplicate against what is already stored in Supabase.
-  3. Enrich NEW titles with TMDB detail data (status, genres, certifications, etc.).
+  3. Enrich NEW titles with TMDB detail data (status, genres, certifications,
+     watch providers, etc.).
   4. Persist everything to Supabase.
 
 Run locally (requires env vars to be set in the shell):
@@ -235,6 +236,10 @@ def main() -> None:
             print(f"[BOT] Skipping {title}: runtime={runtime}min (short film filter)")
             continue
 
+        # --- Watch providers via TMDB watch/providers --------------------
+        watch_providers   = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+        is_streamable_now = bool(watch_providers.get("flatrate") or watch_providers.get("free"))
+
         # --- Build and persist the media record -------------------------
         media_record = {
             "tmdb_id":      tmdb_id,
@@ -245,7 +250,7 @@ def main() -> None:
             "release_date":    release_date,
             "us_release_date": us_release_date,
             "is_in_theatres":    False,
-            "is_streamable_now": False,
+            "is_streamable_now": is_streamable_now,
             "popularity":   item.get("popularity", 0.0),
             "imdb_id":      item.get("imdb_id"),
             "runtime":      runtime,
@@ -259,13 +264,45 @@ def main() -> None:
             "is_limited_series": is_limited_series,
         }
 
-        db.upsert_media(media_record)
+        media_id = db.upsert_media(media_record)
+        if media_id:
+            if watch_providers:
+                db.upsert_streaming_availability(media_id=media_id, providers=watch_providers)
+            db.update_streaming_last_checked(media_id)
         print(f"[BOT] Step 9 {index}/{total}: {title} (status={status or 'unknown'})")
 
-    # Load reverify list for Steps 10b and 11
+    # Load reverify list for Steps 10, 10b and 11
     today = date.today()
     reverify_list = db.get_titles_to_reverify(today)
-    print(f"\n[BOT] {len(reverify_list)} titles queued for periodic score and popularity updates.")
+    print(f"\n[BOT] {len(reverify_list)} titles queued for periodic re-verification.")
+
+    # ------------------------------------------------------------------ #
+    # Step 10 — Re-verify streaming providers for existing titles         #
+    # ------------------------------------------------------------------ #
+    print(f"\n[BOT] Step 10: Re-verifying streaming providers for {len(reverify_list)} existing titles...")
+
+    reverified = 0
+    for item in reverify_list:
+        media_id   = item["id"]
+        tmdb_id    = item["tmdb_id"]
+        title      = item["title"]
+        media_type = item["media_type"]
+
+        providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+
+        if providers:
+            is_streamable = bool(providers.get("flatrate") or providers.get("free"))
+            db.delete_streaming_providers(media_id)
+            db.upsert_streaming_availability(media_id=media_id, providers=providers)
+            db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
+
+        db.update_streaming_last_checked(media_id)
+        reverified += 1
+
+        print(f"[BOT] Re-verified {title}: {providers if providers else '(no results — kept existing data)'}")
+        time.sleep(0.25)
+
+    print(f"[BOT] Step 10 done. {reverified} titles re-verified.")
 
     # ------------------------------------------------------------------ #
     # Step 10b — Update popularity for titles due for re-verification      #
