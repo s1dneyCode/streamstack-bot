@@ -526,7 +526,7 @@ def main() -> None:
             db.client.table("media_seasons")
             .select("id, season_number")
             .eq("media_id", media_id)
-            .order("season_number", ascending=False)
+            .order("season_number", desc=True)
             .limit(1)
             .execute()
             .data
