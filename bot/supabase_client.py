@@ -66,10 +66,7 @@ def compute_popularity_score(
     if days is None:
         freshness = 0
     elif days <= 30:
-        # Full freshness for titles released in the last 30 days,
-        # regardless of vote_count — new releases haven't had time to
-        # accumulate votes yet.
-        freshness = 1.0
+        freshness = min((vote_count or 0) / 200.0, 1.0) if vote_count else 0
     else:
         freshness_scale = min((vote_count or 0) / 100.0, 1.0) if vote_count else 0
         freshness = math.exp(-days / 365) * freshness_scale

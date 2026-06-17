@@ -9,7 +9,7 @@ Formula (Bayesian weighted + tiered freshness decay):
     if release_date is None:
         freshness = 0
     elif days_since_release <= 30:
-        freshness = 1.0   # full freshness regardless of vote_count
+        freshness = min(vote_count / 200, 1.0)   # full boost at 200+ votes
     else:
         freshness_scale = min(vote_count / 100, 1.0)   # full boost at 100+ votes
         freshness = exp(-days_since_release / 365) * freshness_scale
