@@ -1111,29 +1111,23 @@ class TmdbClient:
         us_release_date = min(us_dates) if us_dates else None
         return release_date, us_release_date
 
-    def get_watch_providers(self, tmdb_id: int, media_type: str) -> dict[str, list[str]]:
+    def get_watch_providers(self, tmdb_id: int, media_type: str) -> list[str]:
         """
-        Return US watch providers for a title from
-        /movie|tv/{id}/watch/providers.
-
-        Returns a dict with keys 'flatrate', 'free', 'ads', 'rent', 'buy',
-        each mapping to a list of provider_name strings. Returns {} when
-        there is no US entry in the response (or on error).
+        Return US flatrate (subscription) provider names for a title from
+        /movie|tv/{id}/watch/providers. Returns [] when there is no US
+        entry, no flatrate providers, or on error.
         """
         try:
             data = self._get(f"/{media_type}/{tmdb_id}/watch/providers")
         except Exception as exc:
             print(f"[TMDB] Could not fetch watch providers for {media_type}/{tmdb_id}: {exc}")
-            return {}
+            return []
 
         us = data.get("results", {}).get("US")
         if not us:
-            return {}
+            return []
 
-        return {
-            kind: [p["provider_name"] for p in us.get(kind, []) if p.get("provider_name")]
-            for kind in ("flatrate", "free", "ads", "rent", "buy")
-        }
+        return [p["provider_name"] for p in us.get("flatrate", []) if p.get("provider_name")]
 
     def get_title_logo(self, tmdb_id: int, media_type: str) -> str | None:
         """

@@ -2,9 +2,9 @@
 Backfill: refresh streaming availability for every title in public.media
 using TMDB's /movie|tv/{id}/watch/providers endpoint.
 
-Processes all titles (not just ones missing data) so monetization types
-and dropped providers stay in sync. Also updates is_streamable_now
-(true if flatrate OR free providers exist in US).
+Only flatrate (subscription) providers are extracted. Processes all
+titles (not just ones missing data) so dropped providers stay in sync,
+and updates is_streamable_now accordingly.
 
 Run manually:
     python -m bot.backfill_streaming
@@ -75,13 +75,11 @@ def main() -> None:
         providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
 
         if providers:
-            is_streamable = bool(providers.get("flatrate") or providers.get("free"))
             db.delete_streaming_providers(media_id)
             db.upsert_streaming_availability(media_id=media_id, providers=providers)
-            db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
+            db.client.table("media").update({"is_streamable_now": True}).eq("id", media_id).execute()
             updated += 1
-            if is_streamable:
-                streamable_count += 1
+            streamable_count += 1
             print(f"[BACKFILL] {i}/{total} {title}: {providers}")
         else:
             print(f"[BACKFILL] {i}/{total} {title}: no providers found")

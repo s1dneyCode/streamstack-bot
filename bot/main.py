@@ -238,7 +238,7 @@ def main() -> None:
 
         # --- Watch providers via TMDB watch/providers --------------------
         watch_providers   = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
-        is_streamable_now = bool(watch_providers.get("flatrate") or watch_providers.get("free"))
+        is_streamable_now = bool(watch_providers)
 
         # --- Build and persist the media record -------------------------
         media_record = {
@@ -291,10 +291,9 @@ def main() -> None:
         providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
 
         if providers:
-            is_streamable = bool(providers.get("flatrate") or providers.get("free"))
             db.delete_streaming_providers(media_id)
             db.upsert_streaming_availability(media_id=media_id, providers=providers)
-            db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
+            db.client.table("media").update({"is_streamable_now": True}).eq("id", media_id).execute()
 
         db.update_streaming_last_checked(media_id)
         reverified += 1
