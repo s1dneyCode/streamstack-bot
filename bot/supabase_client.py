@@ -13,7 +13,8 @@ Expected schema (create once in the Supabase dashboard / migrations):
         overview        text
         poster_path     text
         media_type      text          -- 'movie' | 'tv'
-        release_date    date
+        release_date    date          -- earliest worldwide release date
+        us_release_date date          -- earliest US theatrical/digital date (movies only)
         rt_score        smallint      -- 0-100 or NULL
         is_in_theatres  boolean       -- always False for now
         is_streamable_now boolean
@@ -128,6 +129,7 @@ class SupabaseClient:
             upsert_payload["original_language"] = media_dict.get("original_language")
             upsert_payload["is_documentary"]    = media_dict.get("is_documentary")
             upsert_payload["is_limited_series"] = media_dict.get("is_limited_series")
+            upsert_payload["us_release_date"]   = media_dict.get("us_release_date")
             self.client.table("media").upsert(upsert_payload, on_conflict="tmdb_id").execute()
 
             # Fetch the row id in a separate query — chaining .select() after

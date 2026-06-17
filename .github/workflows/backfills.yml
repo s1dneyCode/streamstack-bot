@@ -27,6 +27,7 @@ on:
           - certifications
           - seasons
           - season-ratings
+          - release-dates
       role:
         description: 'Credits role filter (optional, e.g. producer). Only used when job == credits.'
         required: false
@@ -361,3 +362,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_season_ratings
+
+  backfill-release-dates:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.job == 'release-dates'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill release dates
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_release_dates

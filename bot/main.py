@@ -200,6 +200,8 @@ def main() -> None:
         original_language = item.get("original_language")
         is_documentary    = item.get("is_documentary", False)
         genres            = [g for g in item.get("genre", "").split(", ") if g]
+        release_date      = item.get("release_date")
+        us_release_date   = None
 
         if media_type == "tv":
             try:
@@ -224,6 +226,10 @@ def main() -> None:
             except Exception:
                 pass
 
+            worldwide_date, us_release_date = tmdb.get_movie_release_dates(tmdb_id=tmdb_id)
+            if worldwide_date:
+                release_date = worldwide_date
+
         # --- Runtime filter: skip short films ---------------------------
         if media_type == "movie" and runtime is not None and runtime < 40:
             print(f"[BOT] Skipping {title}: runtime={runtime}min (short film filter)")
@@ -236,7 +242,8 @@ def main() -> None:
             "overview":     item.get("overview"),
             "poster_path":  item.get("poster_path"),
             "media_type":   media_type,
-            "release_date": item.get("release_date"),
+            "release_date":    release_date,
+            "us_release_date": us_release_date,
             "is_in_theatres":    False,
             "is_streamable_now": False,
             "popularity":   item.get("popularity", 0.0),

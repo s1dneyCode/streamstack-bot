@@ -1078,6 +1078,39 @@ class TmdbClient:
             print(f"[TMDB] Could not fetch certification for {media_type}/{tmdb_id}: {exc}")
         return None
 
+    def get_movie_release_dates(self, tmdb_id: int) -> tuple[str | None, str | None]:
+        """
+        Return (release_date, us_release_date) for a movie from
+        /movie/{id}/release_dates.
+
+        release_date     → earliest release date across ALL regions/types
+                            (worldwide premiere, used as the canonical date).
+        us_release_date   → earliest US release date with type == 3
+                            (Theatrical) or type == 4 (Digital).
+        """
+        try:
+            data = self._get(f"/movie/{tmdb_id}/release_dates")
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch release dates for movie/{tmdb_id}: {exc}")
+            return None, None
+
+        all_dates: list[str] = []
+        us_dates: list[str] = []
+
+        for country in data.get("results", []):
+            for entry in country.get("release_dates", []):
+                raw = entry.get("release_date")
+                if not raw:
+                    continue
+                date_str = raw[:10]
+                all_dates.append(date_str)
+                if country.get("iso_3166_1") == "US" and entry.get("type") in (3, 4):
+                    us_dates.append(date_str)
+
+        release_date    = min(all_dates) if all_dates else None
+        us_release_date = min(us_dates) if us_dates else None
+        return release_date, us_release_date
+
     def get_title_logo(self, tmdb_id: int, media_type: str) -> str | None:
         """
         Return a full image URL for the title's logo, preferring English.
