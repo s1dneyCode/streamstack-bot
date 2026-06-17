@@ -1,14 +1,20 @@
 """
 Backfill: calculate and update popularity_score for all rows in public.media.
 
-Formula (Bayesian weighted + vote-scaled freshness decay):
+Formula (Bayesian weighted + tiered freshness decay):
     normalized_popularity = min(popularity / 500 * 100, 100)
     raw_score = (normalized_popularity * 0.3) + (tmdb_score * 0.5) + (rt_score * 0.2)
     bayesian  = (v / (v + 500)) * raw_score + (500 / (v + 500)) * 72.07
-    freshness_scale = min(vote_count / 100, 1.0)   # full boost at 100+ votes
-    freshness = exp(-days_since_release / 365) * freshness_scale
+
+    if release_date is None:
+        freshness = 0
+    elif days_since_release <= 30:
+        freshness = 1.0   # full freshness regardless of vote_count
+    else:
+        freshness_scale = min(vote_count / 100, 1.0)   # full boost at 100+ votes
+        freshness = exp(-days_since_release / 365) * freshness_scale
+
     popularity_score = bayesian * (0.7 + 0.3 * freshness)
-    # If release_date is None: popularity_score = bayesian * 0.7
 
 Run via:
     python -m bot.backfill_popularity_score

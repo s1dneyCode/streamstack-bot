@@ -62,8 +62,17 @@ def compute_popularity_score(
         except (ValueError, TypeError):
             pass
 
-    freshness_scale = min((vote_count or 0) / 100.0, 1.0) if vote_count else 0
-    freshness = math.exp(-days / 365) * freshness_scale if days is not None else 0
+    if days is None:
+        freshness = 0
+    elif days <= 30:
+        # Full freshness for titles released in the last 30 days,
+        # regardless of vote_count — new releases haven't had time to
+        # accumulate votes yet.
+        freshness = 1.0
+    else:
+        freshness_scale = min((vote_count or 0) / 100.0, 1.0) if vote_count else 0
+        freshness = math.exp(-days / 365) * freshness_scale
+
     return round(bayesian * (0.7 + 0.3 * freshness), 2)
 
 
