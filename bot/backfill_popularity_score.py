@@ -3,7 +3,13 @@ Backfill: calculate and update popularity_score for all rows in public.media.
 
 Formula (Bayesian weighted + tiered freshness decay):
     normalized_popularity = min(popularity / 500 * 100, 100)
-    raw_score = (normalized_popularity * 0.3) + (tmdb_score * 0.5) + (rt_score * 0.2)
+
+    if rt_score is None:
+        # No RT score yet — redistribute its 5% weight to tmdb_score
+        raw_score = (normalized_popularity * 0.3) + (tmdb_score * 0.70)
+    else:
+        raw_score = (normalized_popularity * 0.3) + (tmdb_score * 0.65) + (rt_score * 0.05)
+
     bayesian  = (v / (v + 500)) * raw_score + (500 / (v + 500)) * 72.07
 
     if release_date is None:

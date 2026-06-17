@@ -43,12 +43,18 @@ _PRE_RELEASE_STATUSES = frozenset({'In Production', 'Post Production', 'Planned'
 def compute_popularity_score(
     popularity: float,
     tmdb_score: int,
-    rt_score: int,
+    rt_score: int | None,
     vote_count: int | None,
     release_date: str | None = None,
 ) -> float:
     normalized = min((popularity or 0.0) / 500 * 100, 100)
-    raw = (normalized * 0.3) + ((tmdb_score or 0) * 0.5) + ((rt_score or 0) * 0.2)
+
+    if rt_score is None:
+        # No RT score yet — redistribute its 5% weight to tmdb_score
+        raw = (normalized * 0.3) + ((tmdb_score or 0) * 0.70)
+    else:
+        raw = (normalized * 0.3) + ((tmdb_score or 0) * 0.65) + (rt_score * 0.05)
+
     v = vote_count or 0
     if v == 0:
         bayesian = raw
@@ -105,11 +111,11 @@ class SupabaseClient:
         try:
             popularity   = media_dict.get("popularity", 0.0) or 0.0
             tmdb_score   = media_dict.get("tmdb_score", 0) or 0
-            rt_score     = media_dict.get("rt_score", 0) or 0
+            rt_score     = media_dict.get("rt_score")
             vote_count   = media_dict.get("vote_count")
             status       = media_dict.get("status")
             if status in _PRE_RELEASE_STATUSES:
-                rt_score = 0
+                rt_score = None
             popularity_score = compute_popularity_score(
                 popularity, tmdb_score, rt_score, vote_count,
                 release_date=media_dict.get("release_date"),
