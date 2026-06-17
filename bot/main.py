@@ -578,6 +578,82 @@ def main() -> None:
 
     print(f"[BOT] Step 17 done. {step17_series} series processed, {step17_episodes} episode dates updated.")
 
+    # ------------------------------------------------------------------ #
+    # Step 17b — Insert new episodes for active series                    #
+    # ------------------------------------------------------------------ #
+    print("\n[BOT] Step 17b: Checking for new episodes on active series...")
+
+    # Reuse active_series (Returning Series + streamable, deduped, capped at 50)
+    step17b_checked  = 0
+    step17b_episodes = 0
+
+    for show in active_series:
+        media_id = show["id"]
+        tmdb_id  = show["tmdb_id"]
+        title    = show["title"]
+
+        # Find the latest season stored in our DB for this show
+        latest = (
+            db.client.table("media_seasons")
+            .select("id, season_number")
+            .eq("media_id", media_id)
+            .order("season_number", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not latest:
+            continue
+
+        season_id     = latest[0]["id"]
+        season_number = latest[0]["season_number"]
+        step17b_checked += 1
+
+        try:
+            tmdb_seasons = tmdb.get_seasons(tmdb_id=tmdb_id)
+        except Exception as exc:
+            print(f"[BOT] Step 17b {title}: fetch failed — {exc}")
+            time.sleep(0.25)
+            continue
+
+        tmdb_season = next((s for s in tmdb_seasons if s["season_number"] == season_number), None)
+        if not tmdb_season:
+            time.sleep(0.25)
+            continue
+
+        tmdb_episode_count = tmdb_season.get("episode_count") or 0
+
+        stored_eps = (
+            db.client.table("media_episodes")
+            .select("episode_number")
+            .eq("season_id", season_id)
+            .execute()
+            .data or []
+        )
+
+        if tmdb_episode_count <= len(stored_eps):
+            time.sleep(0.25)
+            continue
+
+        try:
+            _, fresh_eps = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=season_number)
+        except Exception as exc:
+            print(f"[BOT] Step 17b {title}: season fetch failed — {exc}")
+            time.sleep(0.25)
+            continue
+
+        existing_nums = {row["episode_number"] for row in stored_eps}
+        new_eps = [ep for ep in fresh_eps if ep.get("episode_number") not in existing_nums]
+
+        if new_eps:
+            n = db.upsert_episodes(season_id=season_id, episodes=new_eps)
+            step17b_episodes += n
+            print(f"[BOT] Step 17b {title}: {n} new episode(s) inserted (season {season_number})")
+
+        time.sleep(0.25)
+
+    print(f"[BOT] Step 17b done. {step17b_checked} series checked, {step17b_episodes} new episodes inserted.")
+
 
 if __name__ == "__main__":
     main()
