@@ -237,9 +237,12 @@ def main() -> None:
             continue
 
         # --- Watch providers via TMDB watch/providers --------------------
-        watch_providers    = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
-        watch_providers    = [p for p in watch_providers if p in ALLOWED_PROVIDERS]
-        is_streamable_now  = bool(watch_providers)
+        watch_providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+        watch_providers = {
+            kind: [p for p in names if p in ALLOWED_PROVIDERS]
+            for kind, names in watch_providers.items()
+        }
+        is_streamable_now = bool(watch_providers.get("flatrate"))
 
         # --- Build and persist the media record -------------------------
         media_record = {
@@ -267,7 +270,7 @@ def main() -> None:
 
         media_id = db.upsert_media(media_record)
         if media_id:
-            if watch_providers:
+            if any(watch_providers.values()):
                 db.upsert_streaming_availability(media_id=media_id, providers=watch_providers)
             db.update_streaming_last_checked(media_id)
         print(f"[BOT] Step 9 {index}/{total}: {title} (status={status or 'unknown'})")
@@ -290,17 +293,21 @@ def main() -> None:
         media_type = item["media_type"]
 
         providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
-        providers = [p for p in providers if p in ALLOWED_PROVIDERS]
+        providers = {
+            kind: [p for p in names if p in ALLOWED_PROVIDERS]
+            for kind, names in providers.items()
+        }
 
-        if providers:
+        if any(providers.values()):
+            is_streamable = bool(providers.get("flatrate"))
             db.delete_streaming_providers(media_id)
             db.upsert_streaming_availability(media_id=media_id, providers=providers)
-            db.client.table("media").update({"is_streamable_now": True}).eq("id", media_id).execute()
+            db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
 
         db.update_streaming_last_checked(media_id)
         reverified += 1
 
-        print(f"[BOT] Re-verified {title}: {providers if providers else '(no results — kept existing data)'}")
+        print(f"[BOT] Re-verified {title}: {providers if any(providers.values()) else '(no results — kept existing data)'}")
         time.sleep(0.25)
 
     print(f"[BOT] Step 10 done. {reverified} titles re-verified.")

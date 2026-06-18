@@ -22,11 +22,12 @@ Expected schema (create once in the Supabase dashboard / migrations):
         updated_at      timestamptz   DEFAULT now()
 
     public.streaming_availability
-        id           bigint  PRIMARY KEY GENERATED ALWAYS AS IDENTITY
-        media_id     bigint  REFERENCES media(id) ON DELETE CASCADE
-        provider_name text
-        region       text
-        UNIQUE (media_id, provider_name, region)
+        id                bigint  PRIMARY KEY GENERATED ALWAYS AS IDENTITY
+        media_id          bigint  REFERENCES media(id) ON DELETE CASCADE
+        provider_name     text
+        region            text
+        monetization_type text    -- 'flatrate' | 'rent' | 'buy'
+        UNIQUE (media_id, provider_name, region, monetization_type)
 """
 
 import math
@@ -168,32 +169,35 @@ class SupabaseClient:
             print(f"[Supabase] Error upserting media '{media_dict.get('title')}': {exc}")
             return None
 
-    def upsert_streaming_availability(self, media_id: int, providers: list[str]) -> None:
+    def upsert_streaming_availability(self, media_id: int, providers: dict[str, list[str]]) -> None:
         """
         Persist streaming availability rows for a given media record.
 
-        Each (media_id, provider_name, region) triple is upserted independently
-        so partial provider lists on subsequent runs don't wipe existing rows —
-        only the rows that come back from the API are touched.
+        Each (media_id, provider_name, region, monetization_type) tuple is
+        upserted independently so partial provider lists on subsequent runs
+        don't wipe existing rows — only the rows that come back from the
+        API are touched.
 
         Parameters
         ----------
         media_id   Internal `id` from the media table (FK).
-        providers  List of canonical provider name strings (e.g. ['Netflix']).
+        providers  Dict as returned by TmdbClient.get_watch_providers(), e.g.
+                   {'flatrate': ['Netflix'], 'rent': ['Apple TV'], 'buy': [...]}.
         """
-        if not providers:
+        rows = [
+            {"media_id": media_id, "provider_name": name, "region": "US", "monetization_type": kind}
+            for kind, names in (providers or {}).items()
+            for name in names
+        ]
+
+        if not rows:
             print(f"[Supabase] No streaming providers to upsert for media_id={media_id}.")
             return
-
-        rows = [
-            {"media_id": media_id, "provider_name": provider, "region": "US"}
-            for provider in providers
-        ]
 
         try:
             self.client.table("streaming_availability").upsert(
                 rows,
-                on_conflict="media_id,provider_name,region",
+                on_conflict="media_id,provider_name,region,monetization_type",
             ).execute()
             print(f"[Supabase] Upserted {len(rows)} streaming row(s) for media_id={media_id}.")
 
