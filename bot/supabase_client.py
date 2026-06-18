@@ -53,6 +53,7 @@ ALLOWED_PROVIDERS = frozenset({
     'Apple TV Plus',
     'Crunchyroll', 'Crunchyroll Amazon Channel',
     'AMC+', 'AMC+ Amazon Channel', 'AMC Plus Apple TV Channel',
+    'MGM Plus', 'MGM Plus Roku Premium Channel', 'MGM+ Amazon Channel',
 })
 
 
