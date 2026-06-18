@@ -1178,29 +1178,3 @@ class TmdbClient:
         except Exception as exc:
             print(f"[TMDB] Could not fetch external_ids for {media_type}/{tmdb_id}: {exc}")
             return None
-
-    def get_watch_providers(self, tmdb_id: int, media_type: str) -> list[str]:
-        """
-        Return the names of US flatrate (subscription) streaming providers for
-        a given title.
-
-        TMDB's watch/providers endpoint groups providers by monetisation type
-        (flatrate, rent, buy, etc.).  We only care about *flatrate* because
-        that corresponds to "included with subscription" services like Netflix
-        or Max — not one-off rentals.
-
-        Returns an empty list when no US flatrate data is available.
-        """
-        print(f"[TMDB] Fetching watch providers for {media_type} {tmdb_id}...")
-
-        try:
-            data = self._get(f"/{media_type}/{tmdb_id}/watch/providers")
-        except Exception as exc:
-            print(f"[TMDB] Could not fetch providers for {tmdb_id}: {exc}")
-            return []
-
-        us_data = data.get("results", {}).get("US", {})
-        flatrate_entries = us_data.get("flatrate", [])
-
-        # Each entry is a dict like {"provider_name": "Netflix", ...}
-        return [entry["provider_name"] for entry in flatrate_entries if "provider_name" in entry]
