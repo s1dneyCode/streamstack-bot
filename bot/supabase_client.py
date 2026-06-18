@@ -334,7 +334,7 @@ class SupabaseClient:
             rows.append({"media_id": media_id, "name": p["name"], "role": "writer", "order": p.get("order", i + 1), "character": None})
 
         for p in cast:
-            rows.append({"media_id": media_id, "name": p["name"], "role": "cast", "order": None, "character": p.get("character", "")})
+            rows.append({"media_id": media_id, "name": p["name"], "role": "cast", "order": p.get("order"), "character": p.get("character", "")})
 
         for p in (created_by or []):
             rows.append({"media_id": media_id, "name": p["name"], "role": "created_by", "order": None, "character": None})

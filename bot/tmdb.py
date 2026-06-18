@@ -983,7 +983,7 @@ class TmdbClient:
 
             cast_raw = data.get("cast", [])
             cast = [
-                {"name": m.get("name", ""), "character": m.get("character", "")}
+                {"name": m.get("name", ""), "character": m.get("character", ""), "order": m.get("order")}
                 for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
             ][:20]
 
@@ -1009,7 +1009,7 @@ class TmdbClient:
                 agg = self._get(f"/tv/{tmdb_id}/aggregate_credits")
                 cast_raw = agg.get("cast", [])
                 cast = [
-                    {"name": m.get("name", ""), "character": m.get("character", "")}
+                    {"name": m.get("name", ""), "character": m.get("character", ""), "order": m.get("order")}
                     for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
                 ][:20]
                 producers = _extract_producers(agg.get("crew", []))
