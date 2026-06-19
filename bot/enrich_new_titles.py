@@ -30,6 +30,23 @@ POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 BUCKET      = "media-images"
 
 
+def _full_image_url(path: str) -> str:
+    """
+    Build an absolute TMDB image URL from *path*.
+
+    *path* is normally a relative TMDB path (e.g. "/abc123.jpg"), but some
+    callers (e.g. media.poster_path, already normalized by tmdb.py's list
+    endpoints) pass an already-absolute URL. Prepending POSTER_BASE in that
+    case would produce a malformed double-prefixed URL, so this is a no-op
+    when *path* is already absolute.
+    """
+    if not path:
+        return ""
+    if path.startswith("https://") or path.startswith("http://"):
+        return path
+    return f"{POSTER_BASE}{path}"
+
+
 def load_env() -> dict[str, str]:
     required = ["TMDB_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
     config: dict[str, str] = {}
@@ -101,7 +118,7 @@ def main() -> None:
             poster_url    = None
             carousel_urls: list[str] = []
             if poster_path:
-                poster_url = migrate_poster(db, tmdb_id, title, f"{POSTER_BASE}{poster_path}")
+                poster_url = migrate_poster(db, tmdb_id, title, _full_image_url(poster_path))
             carousel_urls = migrate_carousel(db, tmdb, tmdb_id, title, media_type)
             if poster_url or carousel_urls:
                 stats["images"] += 1
@@ -152,7 +169,7 @@ def main() -> None:
                 for s in seasons_raw:
                     sp = s.get("poster_path", "")
                     if sp:
-                        img = download_image(f"{POSTER_BASE}{sp}")
+                        img = download_image(_full_image_url(sp))
                         if img:
                             url = db.upload_image(
                                 BUCKET,
