@@ -22,11 +22,12 @@ Expected schema (create once in the Supabase dashboard / migrations):
         updated_at      timestamptz   DEFAULT now()
 
     public.streaming_availability
-        id                bigint  PRIMARY KEY GENERATED ALWAYS AS IDENTITY
-        media_id          bigint  REFERENCES media(id) ON DELETE CASCADE
+        id                bigint      PRIMARY KEY GENERATED ALWAYS AS IDENTITY
+        media_id          bigint      REFERENCES media(id) ON DELETE CASCADE
         provider_name     text
         region            text
-        monetization_type text    -- 'flatrate' | 'rent' | 'buy'
+        monetization_type text        -- 'flatrate' | 'rent' | 'buy'
+        first_seen_at     timestamptz DEFAULT now()  -- set once, never overwritten on update
         UNIQUE (media_id, provider_name, region, monetization_type)
 """
 
@@ -180,6 +181,13 @@ class SupabaseClient:
         don't wipe existing rows — only the rows that come back from the
         API are touched.
 
+        first_seen_at is deliberately left out of the row payload. The
+        column has a DB-level DEFAULT now(), so on INSERT it gets stamped
+        with the current time, but since it's absent from the upsert body
+        PostgREST leaves it untouched on UPDATE (conflict) — it always
+        reflects when a title first appeared on that platform, not the
+        last time we re-checked it.
+
         Parameters
         ----------
         media_id   Internal `id` from the media table (FK).
@@ -200,6 +208,7 @@ class SupabaseClient:
             self.client.table("streaming_availability").upsert(
                 rows,
                 on_conflict="media_id,provider_name,region,monetization_type",
+                ignore_duplicates=False,
             ).execute()
             print(f"[Supabase] Upserted {len(rows)} streaming row(s) for media_id={media_id}.")
 
