@@ -24,6 +24,10 @@ from .tmdb import TmdbClient
 from .omdb import OmdbClient
 from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES, ALLOWED_PROVIDERS
 
+# Mirrors _ALLOWED_LANGUAGES in bulk_import.py (source of truth) — duplicated
+# here because that constant is function-local there, not importable.
+_ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh'}
+
 
 def load_env() -> dict[str, str]:
     """
@@ -234,6 +238,11 @@ def main() -> None:
         # --- Runtime filter: skip short films ---------------------------
         if media_type == "movie" and runtime is not None and runtime < 40:
             print(f"[BOT] Skipping {title}: runtime={runtime}min (short film filter)")
+            continue
+
+        # --- Language filter ---------------------------------------------
+        if original_language not in _ALLOWED_LANGUAGES:
+            print(f"[BOT] Skipping {title}: original_language={original_language} (language filter)")
             continue
 
         # --- Watch providers via TMDB watch/providers --------------------
