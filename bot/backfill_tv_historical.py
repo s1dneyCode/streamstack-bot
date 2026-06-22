@@ -2,10 +2,13 @@
 One-time backfill: discover and insert high-quality TV shows from 2000-2014
 that are missing from the catalog.
 
-Hits /discover/tv for two ranges (2000-2009, 2010-2014), up to 30 pages
-each, filtered at the API level to vote_count >= 300, vote_average >= 7.0
-(our tmdb_score >= 70), the major-language allowlist, and excluding
-Kids/Talk/Soap genres. Inserts rows the same way main.py Step 9 does
+Hits /discover/tv for two ranges (2000-2009, 2010-2014), up to 50 pages
+each, filtered at the API level to vote_average >= 7.5, the major-language
+allowlist, and excluding Kids/Talk/Soap genres. Each range is fetched as
+two separate calls — non-Japanese languages (vote_count >= 150) and
+Japanese only (vote_count >= 300, since anime accumulates votes more
+slowly) — then combined and deduped before checking against the DB.
+Inserts rows the same way main.py Step 9 does
 (detail + watch providers, no seasons/episodes/credits/trailers), but
 unlike Step 9 it also includes tmdb_score in the insert payload (taken
 from the detail fetch's vote_average, same as bulk_import.py) so
@@ -29,6 +32,11 @@ from .supabase_client import SupabaseClient, ALLOWED_PROVIDERS
 # Mirrors _ALLOWED_LANGUAGES in bulk_import.py (source of truth) — duplicated
 # here because that constant is function-local there, not importable.
 _ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh'}
+
+# Japanese is fetched separately from the rest — get_discover_tv_historical()
+# applies a higher vote_count.gte (300 vs 150) for 'ja' since anime
+# accumulates TMDB votes more slowly than Western/Korean content.
+_NON_JA_LANGUAGES = "en|es|fr|de|ko|pt|it|zh"
 
 _YEAR_RANGES = [
     ("2000-01-01", "2009-12-31"),
@@ -59,13 +67,21 @@ def main() -> None:
     tv_genre_map = tmdb.get_genre_map("tv")
 
     # ------------------------------------------------------------------ #
-    # Step 1 — Fetch both year ranges from TMDB                           #
+    # Step 1 — Fetch both year ranges from TMDB, split by language so     #
+    #          Japanese gets its own (higher) vote_count threshold        #
     # ------------------------------------------------------------------ #
     all_sources: list[dict] = []
     for date_gte, date_lte in _YEAR_RANGES:
-        print(f"\n[BACKFILL_TV] Discovering TV shows {date_gte}..{date_lte}...")
+        print(f"\n[BACKFILL_TV] Discovering TV shows {date_gte}..{date_lte} (non-Japanese)...")
         all_sources += tmdb.get_discover_tv_historical(
-            date_gte=date_gte, date_lte=date_lte, pages=50, genre_map=tv_genre_map  # DIAGNOSTIC - revert after test
+            date_gte=date_gte, date_lte=date_lte,
+            with_original_language=_NON_JA_LANGUAGES, pages=50, genre_map=tv_genre_map,
+        )
+
+        print(f"\n[BACKFILL_TV] Discovering TV shows {date_gte}..{date_lte} (Japanese)...")
+        all_sources += tmdb.get_discover_tv_historical(
+            date_gte=date_gte, date_lte=date_lte,
+            with_original_language="ja", pages=50, genre_map=tv_genre_map,
         )
 
     # ------------------------------------------------------------------ #

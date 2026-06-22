@@ -849,33 +849,42 @@ class TmdbClient:
         self,
         date_gte: str,
         date_lte: str,
-        pages: int = 30,
+        with_original_language: str,
+        pages: int = 50,
         genre_map: dict[int, str] | None = None,
     ) -> list[dict]:
         """
         Fetch high-quality TV shows first aired within [date_gte, date_lte]
-        via /discover/tv, sorted by vote_count desc.
+        via /discover/tv, sorted by vote_count desc, restricted to
+        *with_original_language* (a single TMDB language code, or a
+        pipe-separated list of codes).
 
-        Filters applied at the API level: vote_count >= 300, vote_average
-        >= 7.0, original language in the major-language allowlist, excludes
-        Kids/Talk/Soap genres (10762/10767/10766). Used by the one-time
-        bot/backfill_tv_historical.py script.
+        Filters applied at the API level: vote_average >= 7.5, excludes
+        Kids/Talk/Soap genres (10762/10767/10766). vote_count threshold is
+        300 when with_original_language == 'ja' and 150 otherwise — anime
+        accumulates TMDB votes more slowly than Western/Korean content, so
+        a flat 150 floor let in too much noise for Japanese-only requests.
+        Used by the one-time bot/backfill_tv_historical.py script.
         """
         genre_map = genre_map or {}
+        vote_count_gte = 300 if with_original_language == "ja" else 150
         seen_ids: set[int] = set()
         results: list[dict] = []
 
         for page in range(1, pages + 1):
-            print(f"[TMDB] Fetching page {page}/{pages} of discover TV ({date_gte}..{date_lte})...")
+            print(
+                f"[TMDB] Fetching page {page}/{pages} of discover TV "
+                f"({date_gte}..{date_lte}, lang={with_original_language})..."
+            )
             data = self._get(
                 "/discover/tv",
                 params={
                     "sort_by": "vote_count.desc",
                     "first_air_date.gte": date_gte,
                     "first_air_date.lte": date_lte,
-                    "vote_count.gte": 150,    # DIAGNOSTIC - revert after test
-                    "vote_average.gte": 6.5,  # DIAGNOSTIC - revert after test
-                    "with_original_language": "en|ja|es|fr|de|ko|pt|it|zh",
+                    "vote_count.gte": vote_count_gte,
+                    "vote_average.gte": 7.5,
+                    "with_original_language": with_original_language,
                     "without_genres": "10762,10767,10766",
                     "language": "en-US",
                     "page": page,
@@ -915,7 +924,10 @@ class TmdbClient:
                     }
                 )
 
-        print(f"[TMDB] Collected {len(results)} unique discover TV shows ({date_gte}..{date_lte}).")
+        print(
+            f"[TMDB] Collected {len(results)} unique discover TV shows "
+            f"({date_gte}..{date_lte}, lang={with_original_language})."
+        )
         return results
 
     def get_trending_movies(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
