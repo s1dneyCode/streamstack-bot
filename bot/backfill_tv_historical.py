@@ -59,7 +59,7 @@ def main() -> None:
     for date_gte, date_lte in _YEAR_RANGES:
         print(f"\n[BACKFILL_TV] Discovering TV shows {date_gte}..{date_lte}...")
         all_sources += tmdb.get_discover_tv_historical(
-            date_gte=date_gte, date_lte=date_lte, pages=30, genre_map=tv_genre_map
+            date_gte=date_gte, date_lte=date_lte, pages=50, genre_map=tv_genre_map  # DIAGNOSTIC - revert after test
         )
 
     # ------------------------------------------------------------------ #

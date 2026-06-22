@@ -873,8 +873,8 @@ class TmdbClient:
                     "sort_by": "vote_count.desc",
                     "first_air_date.gte": date_gte,
                     "first_air_date.lte": date_lte,
-                    "vote_count.gte": 300,
-                    "vote_average.gte": 7.0,
+                    "vote_count.gte": 150,    # DIAGNOSTIC - revert after test
+                    "vote_average.gte": 6.5,  # DIAGNOSTIC - revert after test
                     "with_original_language": "en|ja|es|fr|de|ko|pt|it|zh",
                     "without_genres": "10762,10767,10766",
                     "language": "en-US",
