@@ -19,6 +19,13 @@ Elimination conditions (evaluated only when not protected):
       release_year 2010-2018          -> eliminate if vote_count < 700
       release_year < 2010             -> eliminate if vote_count < 1000
 
+A separate, unconditional pass then deletes short films: movies with a
+known runtime < 40 min, not in theatres, not streamable. This exists
+because bulk_import.py's insert-time runtime filter never actually
+triggers (movie list/discover endpoints don't return runtime, only the
+detail endpoint does), so short films can slip into the catalog and
+only get caught here once backfill_runtime.py fills in the real value.
+
 Run via:
     python -m bot.cleanup_low_quality
     python -m bot.cleanup_low_quality --dry-run
@@ -63,6 +70,30 @@ def fetch_rent_buy_media_ids(db: SupabaseClient) -> set[str]:
             break
         offset += PAGE_SIZE
     return ids
+
+
+def fetch_short_films(db: SupabaseClient) -> list[dict]:
+    """Return movies with a known runtime under 40 min that aren't in theatres or streaming."""
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        batch = (
+            db.client.table("media")
+            .select("id, title, runtime")
+            .eq("media_type", "movie")
+            .lt("runtime", 40)
+            .not_.is_("runtime", "null")
+            .eq("is_in_theatres", False)
+            .eq("is_streamable_now", False)
+            .range(offset, offset + PAGE_SIZE - 1)
+            .execute()
+            .data or []
+        )
+        rows.extend(batch)
+        if len(batch) < PAGE_SIZE:
+            break
+        offset += PAGE_SIZE
+    return rows
 
 
 def fetch_all_media(db: SupabaseClient) -> list[dict]:
@@ -162,21 +193,49 @@ def main() -> None:
 
     if dry_run:
         print(f"[CLEANUP] Dry run — no titles deleted. {total} would have been deleted.")
+    else:
+        deleted = 0
+        failed  = 0
+
+        for row in to_delete:
+            try:
+                db.client.table("media").delete().eq("id", row["id"]).execute()
+                print(f"[CLEANUP] Deleted: {row['title']}")
+                deleted += 1
+            except Exception as exc:
+                print(f"[CLEANUP] Failed to delete id={row['id']} '{row['title']}': {exc}")
+                failed += 1
+
+        print(f"[CLEANUP] Done. {deleted} titles deleted, {failed} failed.")
+
+    # ------------------------------------------------------------------ #
+    # Short film cleanup                                                  #
+    # ------------------------------------------------------------------ #
+    print("\n[CLEANUP] Fetching short films...")
+    short_films = fetch_short_films(db)
+
+    total_short = len(short_films)
+    print(f"[CLEANUP] {total_short} short films matched deletion criteria.")
+    for row in short_films:
+        print(f"[CLEANUP] Would delete: {row['title']} (runtime={row.get('runtime')}min)")
+
+    if dry_run:
+        print(f"[CLEANUP] Dry run — no short films deleted. {total_short} would have been deleted.")
         return
 
-    deleted = 0
-    failed  = 0
+    deleted_short = 0
+    failed_short  = 0
 
-    for row in to_delete:
+    for row in short_films:
         try:
             db.client.table("media").delete().eq("id", row["id"]).execute()
             print(f"[CLEANUP] Deleted: {row['title']}")
-            deleted += 1
+            deleted_short += 1
         except Exception as exc:
             print(f"[CLEANUP] Failed to delete id={row['id']} '{row['title']}': {exc}")
-            failed += 1
+            failed_short += 1
 
-    print(f"[CLEANUP] Done. {deleted} titles deleted, {failed} failed.")
+    print(f"[CLEANUP] Done. {deleted_short} short films deleted, {failed_short} failed.")
 
 
 if __name__ == "__main__":
