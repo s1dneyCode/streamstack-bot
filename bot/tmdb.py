@@ -845,6 +845,79 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique discover TV shows (year: {year}).")
         return results
 
+    def get_discover_tv_historical(
+        self,
+        date_gte: str,
+        date_lte: str,
+        pages: int = 30,
+        genre_map: dict[int, str] | None = None,
+    ) -> list[dict]:
+        """
+        Fetch high-quality TV shows first aired within [date_gte, date_lte]
+        via /discover/tv, sorted by vote_count desc.
+
+        Filters applied at the API level: vote_count >= 300, vote_average
+        >= 7.0, original language in the major-language allowlist, excludes
+        Kids/Talk/Soap genres (10762/10767/10766). Used by the one-time
+        bot/backfill_tv_historical.py script.
+        """
+        genre_map = genre_map or {}
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of discover TV ({date_gte}..{date_lte})...")
+            data = self._get(
+                "/discover/tv",
+                params={
+                    "sort_by": "vote_count.desc",
+                    "first_air_date.gte": date_gte,
+                    "first_air_date.lte": date_lte,
+                    "vote_count.gte": 300,
+                    "vote_average.gte": 7.0,
+                    "with_original_language": "en|ja|es|fr|de|ko|pt|it|zh",
+                    "without_genres": "10762,10767,10766",
+                    "language": "en-US",
+                    "page": page,
+                },
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": item.get("name", ""),
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": "tv",
+                        "release_date": format_date(item.get("first_air_date")),
+                        "vote_average": item.get("vote_average", 0.0),
+                        "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
+                        "imdb_id": item.get("imdb_id", None),
+                        "popularity": item.get("popularity", 0.0),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique discover TV shows ({date_gte}..{date_lte}).")
+        return results
+
     def get_trending_movies(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
         """Fetch trending movies this week via /trending/movie/week."""
         genre_map = genre_map or {}
