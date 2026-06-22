@@ -19,6 +19,12 @@ from .supabase_client import SupabaseClient
 DEFAULT_BATCH_SIZE = 500
 MAX_BATCH_SIZE     = 10000
 
+# Japanese is fetched separately from the rest in the historical TV discover —
+# get_discover_tv_historical() applies a higher vote_count.gte (300 vs 150)
+# for 'ja' since anime accumulates TMDB votes more slowly than Western/Korean
+# content.
+_NON_JA_LANGUAGES = "en|es|fr|de|ko|pt|it|zh"
+
 
 def load_env() -> dict[str, str]:
     required = ["TMDB_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
@@ -133,6 +139,20 @@ def main() -> None:
     year_tv_2019 = tmdb.get_discover_tv_by_year(2019, pages=30, genre_map=tv_genre_map)
     year_tv_2018 = tmdb.get_discover_tv_by_year(2018, pages=30, genre_map=tv_genre_map)
 
+    # Historical TV (2000-2014), split by language: Japanese gets a higher
+    # vote_count.gte floor since anime accumulates votes more slowly.
+    print("\n[BULK] Step 6j: discover historical TV shows (2000-2014, non-Japanese)...")
+    historical_tv_non_ja = tmdb.get_discover_tv_historical(
+        date_gte="2000-01-01", date_lte="2014-12-31",
+        with_original_language=_NON_JA_LANGUAGES, pages=50, genre_map=tv_genre_map,
+    )
+
+    print("\n[BULK] Step 6k: discover historical TV shows (2000-2014, Japanese)...")
+    historical_tv_ja = tmdb.get_discover_tv_historical(
+        date_gte="2000-01-01", date_lte="2014-12-31",
+        with_original_language="ja", pages=50, genre_map=tv_genre_map,
+    )
+
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
     # ------------------------------------------------------------------ #
@@ -153,6 +173,7 @@ def main() -> None:
         + year_movies_2020 + year_movies_2019 + year_movies_2018
         + year_tv_2023 + year_tv_2022 + year_tv_2021
         + year_tv_2020 + year_tv_2019 + year_tv_2018
+        + historical_tv_non_ja + historical_tv_ja
     )
 
     for item in all_sources:
@@ -168,22 +189,43 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     _ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh'}
     _CUTOFF_DATE = date.today() - timedelta(days=365)
+    _HISTORICAL_TV_EXCLUDED_GENRES = {'Kids', 'Soap', 'Talk'}
 
     def _passes_filters(item: dict) -> bool:
         if item.get("original_language") not in _ALLOWED_LANGUAGES:
             return False
+
         votes = item.get("vote_count") or 0
         release = item.get("release_date")
+        release_year = None
+        is_recent = False
         if release:
             try:
-                is_recent = date.fromisoformat(release) >= _CUTOFF_DATE
+                release_date_obj = date.fromisoformat(release)
+                release_year = release_date_obj.year
+                is_recent = release_date_obj >= _CUTOFF_DATE
             except ValueError:
-                is_recent = False
+                pass
+
+        # Historical TV (pre-2015) needs a higher vote_count floor than the
+        # standard recent/older tiers — and Japanese needs an even higher one
+        # since anime accumulates TMDB votes more slowly. Also excludes
+        # Kids/Soap/Talk, mirroring the without_genres filter already applied
+        # at the API level in get_discover_tv_historical().
+        is_historical_tv = item.get("media_type") == "tv" and release_year is not None and release_year < 2015
+
+        if is_historical_tv:
+            threshold = 300 if item.get("original_language") == "ja" else 150
+            if votes < threshold:
+                return False
+            genre_list = [g for g in item.get("genre", "").split(", ") if g]
+            if any(g in _HISTORICAL_TV_EXCLUDED_GENRES for g in genre_list):
+                return False
         else:
-            is_recent = False
-        threshold = 100 if is_recent else 200
-        if votes < threshold:
-            return False
+            threshold = 100 if is_recent else 200
+            if votes < threshold:
+                return False
+
         if item.get("media_type") == "movie":
             runtime = item.get("runtime")
             if runtime is not None and runtime < 40:

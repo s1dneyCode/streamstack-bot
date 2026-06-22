@@ -864,7 +864,7 @@ class TmdbClient:
         300 when with_original_language == 'ja' and 150 otherwise — anime
         accumulates TMDB votes more slowly than Western/Korean content, so
         a flat 150 floor let in too much noise for Japanese-only requests.
-        Used by the one-time bot/backfill_tv_historical.py script.
+        Used by bulk_import.py's historical TV discover (Steps 6j/6k).
         """
         genre_map = genre_map or {}
         vote_count_gte = 300 if with_original_language == "ja" else 150
