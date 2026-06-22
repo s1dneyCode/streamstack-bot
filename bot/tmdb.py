@@ -930,6 +930,82 @@ class TmdbClient:
         )
         return results
 
+    def get_discover_by_provider(
+        self,
+        media_type: str,
+        provider_id: int,
+        pages: int = 50,
+        genre_map: dict[int, str] | None = None,
+    ) -> list[dict]:
+        """
+        Fetch movies or TV shows available via a specific watch provider
+        through /discover/{media_type}, sorted by popularity desc.
+
+        US region, flatrate (subscription) only — no rent/buy. *media_type*
+        must be 'movie' or 'tv'.
+        """
+        genre_map = genre_map or {}
+        endpoint = "/discover/movie" if media_type == "movie" else "/discover/tv"
+        seen_ids: set[int] = set()
+        results: list[dict] = []
+
+        for page in range(1, pages + 1):
+            print(f"[TMDB] Fetching page {page}/{pages} of discover {media_type} (provider={provider_id})...")
+            data = self._get(
+                endpoint,
+                params={
+                    "with_watch_providers": provider_id,
+                    "watch_region": "US",
+                    "watch_monetization_types": "flatrate",
+                    "sort_by": "popularity.desc",
+                    "language": "en-US",
+                    "page": page,
+                },
+            )
+
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+
+                raw_poster = item.get("poster_path") or ""
+                poster_url = f"{POSTER_BASE}{raw_poster}" if raw_poster else ""
+
+                genre_names = [genre_map.get(gid, '') for gid in item.get('genre_ids', [])]
+                genre_str = ', '.join(filter(None, genre_names))
+
+                if media_type == "movie":
+                    title = item.get("title", "")
+                    release_date = format_date(item.get("release_date"))
+                else:
+                    title = item.get("name", "")
+                    release_date = format_date(item.get("first_air_date"))
+
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": title,
+                        "overview": clean_text(item.get("overview")),
+                        "poster_path": poster_url,
+                        "media_type": media_type,
+                        "release_date": release_date,
+                        "vote_average": item.get("vote_average", 0.0),
+                        "tmdb_score": round(item.get("vote_average", 0) * 10),
+                        "genre": genre_str,
+                        "imdb_id": item.get("imdb_id", None),
+                        "popularity": item.get("popularity", 0.0),
+                        "vote_count":        item.get("vote_count"),
+                        "status":            item.get("status"),
+                        "original_language": item.get("original_language"),
+                        "is_documentary":    99 in item.get("genre_ids", []),
+                        "is_limited_series": None,
+                    }
+                )
+
+        print(f"[TMDB] Collected {len(results)} unique discover {media_type} (provider={provider_id}).")
+        return results
+
     def get_trending_movies(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
         """Fetch trending movies this week via /trending/movie/week."""
         genre_map = genre_map or {}

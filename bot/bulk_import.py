@@ -153,6 +153,62 @@ def main() -> None:
         with_original_language="ja", pages=50, genre_map=tv_genre_map,
     )
 
+    # Provider-based discover (US, flatrate only, 50 pages each, movie + tv
+    # per provider)
+    print("\n[BULK] Step 6l: discover movies on Netflix...")
+    provider_movies_netflix = tmdb.get_discover_by_provider("movie", 8, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6m: discover TV shows on Netflix...")
+    provider_tv_netflix = tmdb.get_discover_by_provider("tv", 8, pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6n: discover movies on Amazon Prime...")
+    provider_movies_amazon = tmdb.get_discover_by_provider("movie", 9, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6o: discover TV shows on Amazon Prime...")
+    provider_tv_amazon = tmdb.get_discover_by_provider("tv", 9, pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6p: discover movies on Disney Plus...")
+    provider_movies_disney = tmdb.get_discover_by_provider("movie", 337, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6q: discover TV shows on Disney Plus...")
+    provider_tv_disney = tmdb.get_discover_by_provider("tv", 337, pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6r: discover movies on Hulu...")
+    provider_movies_hulu = tmdb.get_discover_by_provider("movie", 15, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6s: discover TV shows on Hulu...")
+    provider_tv_hulu = tmdb.get_discover_by_provider("tv", 15, pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6t: discover movies on HBO Max...")
+    provider_movies_hbomax = tmdb.get_discover_by_provider("movie", 1899, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6u: discover TV shows on HBO Max...")
+    provider_tv_hbomax = tmdb.get_discover_by_provider("tv", 1899, pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6v: discover movies on Apple TV Plus...")
+    provider_movies_appletv = tmdb.get_discover_by_provider("movie", 350, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6w: discover TV shows on Apple TV Plus...")
+    provider_tv_appletv = tmdb.get_discover_by_provider("tv", 350, pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6x: discover movies on Paramount Plus...")
+    provider_movies_paramount = tmdb.get_discover_by_provider("movie", 531, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6y: discover TV shows on Paramount Plus...")
+    provider_tv_paramount = tmdb.get_discover_by_provider("tv", 531, pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6z: discover movies on Peacock...")
+    provider_movies_peacock = tmdb.get_discover_by_provider("movie", 386, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6aa: discover TV shows on Peacock...")
+    provider_tv_peacock = tmdb.get_discover_by_provider("tv", 386, pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6ab: discover movies on Crunchyroll...")
+    provider_movies_crunchyroll = tmdb.get_discover_by_provider("movie", 283, pages=50, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6ac: discover TV shows on Crunchyroll...")
+    provider_tv_crunchyroll = tmdb.get_discover_by_provider("tv", 283, pages=50, genre_map=tv_genre_map)
+
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
     # ------------------------------------------------------------------ #
@@ -174,6 +230,15 @@ def main() -> None:
         + year_tv_2023 + year_tv_2022 + year_tv_2021
         + year_tv_2020 + year_tv_2019 + year_tv_2018
         + historical_tv_non_ja + historical_tv_ja
+        + provider_movies_netflix + provider_tv_netflix
+        + provider_movies_amazon + provider_tv_amazon
+        + provider_movies_disney + provider_tv_disney
+        + provider_movies_hulu + provider_tv_hulu
+        + provider_movies_hbomax + provider_tv_hbomax
+        + provider_movies_appletv + provider_tv_appletv
+        + provider_movies_paramount + provider_tv_paramount
+        + provider_movies_peacock + provider_tv_peacock
+        + provider_movies_crunchyroll + provider_tv_crunchyroll
     )
 
     for item in all_sources:
