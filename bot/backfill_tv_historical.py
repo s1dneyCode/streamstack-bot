@@ -5,10 +5,16 @@ that are missing from the catalog.
 Hits /discover/tv for two ranges (2000-2009, 2010-2014), up to 30 pages
 each, filtered at the API level to vote_count >= 300, vote_average >= 7.0
 (our tmdb_score >= 70), the major-language allowlist, and excluding
-Kids/Talk/Soap genres. Inserts bare-ish rows the same way main.py Step 9
-does (detail + watch providers, no seasons/episodes/credits/trailers) —
-enrich_new_titles.py picks those up automatically the next morning since
-it queries media created in the last 6 hours.
+Kids/Talk/Soap genres. Inserts rows the same way main.py Step 9 does
+(detail + watch providers, no seasons/episodes/credits/trailers), but
+unlike Step 9 it also includes tmdb_score in the insert payload (taken
+from the detail fetch's vote_average, same as bulk_import.py) so
+popularity_score is computed correctly at insert time instead of
+defaulting to a tmdb_score=0 placeholder. rt_score is still left NULL
+by design — that's filled later by the nightly bot's RT steps or the
+rt-scores backfill, never at initial insert. enrich_new_titles.py picks
+up seasons/episodes/credits/trailers/images automatically the next
+morning since it queries media created in the last 6 hours.
 
 Run via:
     python -m bot.backfill_tv_historical
@@ -104,6 +110,7 @@ def main() -> None:
         original_language = item.get("original_language")
         is_documentary    = item.get("is_documentary", False)
         genres            = [g for g in item.get("genre", "").split(", ") if g]
+        tmdb_score        = item.get("tmdb_score", 0)
 
         try:
             detail = tmdb._get(f"/tv/{tmdb_id}")
@@ -113,6 +120,7 @@ def main() -> None:
             original_language = detail.get("original_language")
             is_documentary    = 99 in [g["id"] for g in detail.get("genres", [])]
             genres            = [g["name"] for g in detail.get("genres", []) if g.get("name")]
+            tmdb_score        = round(detail.get("vote_average", 0) * 10)
         except Exception:
             pass
 
@@ -142,6 +150,7 @@ def main() -> None:
             "is_in_theatres":    False,
             "is_streamable_now": is_streamable_now,
             "popularity":   item.get("popularity", 0.0),
+            "tmdb_score":   tmdb_score,
             "imdb_id":      item.get("imdb_id"),
             "runtime":      item.get("runtime"),
             "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type="tv"),
