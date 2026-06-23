@@ -309,8 +309,7 @@ def main() -> None:
 
         if any(providers.values()):
             is_streamable = bool(providers.get("flatrate"))
-            db.delete_streaming_providers(media_id)
-            db.upsert_streaming_availability(media_id=media_id, providers=providers)
+            db.sync_streaming_providers(media_id=media_id, providers=providers)
             db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
 
         db.update_streaming_last_checked(media_id)

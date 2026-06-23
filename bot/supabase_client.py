@@ -174,19 +174,24 @@ class SupabaseClient:
 
     def upsert_streaming_availability(self, media_id: int, providers: dict[str, list[str]]) -> None:
         """
-        Persist streaming availability rows for a given media record.
+        Insert streaming availability rows for a given media record that
+        don't already exist.
 
         Each (media_id, provider_name, region, monetization_type) tuple is
-        upserted independently so partial provider lists on subsequent runs
-        don't wipe existing rows — only the rows that come back from the
-        API are touched.
+        upserted independently with ignore_duplicates=True: on conflict
+        (row already exists) PostgREST does nothing and leaves the existing
+        row — including first_seen_at — completely untouched. Only rows
+        that don't already exist get a fresh INSERT.
 
-        first_seen_at is deliberately left out of the row payload. The
-        column has a DB-level DEFAULT now(), so on INSERT it gets stamped
-        with the current time, but since it's absent from the upsert body
-        PostgREST leaves it untouched on UPDATE (conflict) — it always
-        reflects when a title first appeared on that platform, not the
-        last time we re-checked it.
+        first_seen_at is also deliberately left out of the row payload. The
+        column has a DB-level DEFAULT now(), so a true INSERT still gets
+        stamped with the current time, but since ignore_duplicates=True
+        means existing rows are never updated at all, first_seen_at always
+        reflects when a title first appeared on that platform.
+
+        Note: this method only ADDS rows — it never removes providers a
+        title lost. Use sync_streaming_providers() when you need to also
+        clean up stale rows.
 
         Parameters
         ----------
@@ -208,20 +213,63 @@ class SupabaseClient:
             self.client.table("streaming_availability").upsert(
                 rows,
                 on_conflict="media_id,provider_name,region,monetization_type",
-                ignore_duplicates=False,
+                ignore_duplicates=True,
             ).execute()
             print(f"[Supabase] Upserted {len(rows)} streaming row(s) for media_id={media_id}.")
 
         except Exception as exc:
             print(f"[Supabase] Error upserting streaming availability for media_id={media_id}: {exc}")
 
-    def delete_streaming_providers(self, media_id: int) -> None:
-        """Delete all streaming_availability rows for a media row before re-inserting."""
+    def sync_streaming_providers(self, media_id: int, providers: dict[str, list[str]]) -> None:
+        """
+        Reconcile streaming_availability for media_id with freshly fetched
+        *providers*, without the delete-then-reinsert pattern that used to
+        reset first_seen_at on every re-verification run.
+
+        Stale rows — present in the DB but absent from *providers* (the
+        title lost that platform) — are deleted individually by id. Rows
+        that are still current are left completely untouched: new ones are
+        inserted via upsert_streaming_availability()'s ignore_duplicates=True
+        upsert, and ones that already exist are simply skipped on conflict,
+        preserving their original first_seen_at.
+
+        Parameters
+        ----------
+        media_id   Internal `id` from the media table (FK).
+        providers  Dict as returned by TmdbClient.get_watch_providers(), e.g.
+                   {'flatrate': ['Netflix'], 'rent': ['Apple TV'], 'buy': [...]}.
+        """
         try:
-            self.client.table("streaming_availability").delete().eq("media_id", media_id).execute()
-            print(f"[Supabase] Deleted streaming rows for media_id={media_id}.")
+            current = (
+                self.client.table("streaming_availability")
+                .select("id, provider_name, region, monetization_type")
+                .eq("media_id", media_id)
+                .execute()
+                .data or []
+            )
         except Exception as exc:
-            print(f"[Supabase] Error deleting streaming rows for media_id={media_id}: {exc}")
+            print(f"[Supabase] Error fetching current streaming rows for media_id={media_id}: {exc}")
+            current = []
+
+        new_combos = {
+            (name, "US", kind)
+            for kind, names in (providers or {}).items()
+            for name in names
+        }
+
+        stale_ids = [
+            row["id"] for row in current
+            if (row["provider_name"], row["region"], row["monetization_type"]) not in new_combos
+        ]
+
+        if stale_ids:
+            try:
+                self.client.table("streaming_availability").delete().in_("id", stale_ids).execute()
+                print(f"[Supabase] Removed {len(stale_ids)} stale streaming row(s) for media_id={media_id}.")
+            except Exception as exc:
+                print(f"[Supabase] Error removing stale streaming rows for media_id={media_id}: {exc}")
+
+        self.upsert_streaming_availability(media_id=media_id, providers=providers)
 
     def update_streaming_last_checked(self, media_id: int) -> None:
         """Stamp streaming_last_checked = now() on the media row."""
