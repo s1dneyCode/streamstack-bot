@@ -20,7 +20,7 @@ Run via:
 import os
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
@@ -99,10 +99,6 @@ def main() -> None:
         "genres":   0,
         "states":   0,
     }
-
-    today           = date.today()
-    today_str       = today.isoformat()
-    ninety_days_ago = (today - timedelta(days=90)).isoformat()
 
     for i, row in enumerate(new_titles, start=1):
         media_id    = row["id"]
@@ -257,14 +253,12 @@ def main() -> None:
                 .limit(1)
                 .execute()
             )
-            has_providers     = bool(sa.data)
-            release_date      = row.get("release_date") or ""
-            recently_released = bool(release_date) and ninety_days_ago <= release_date <= today_str
+            has_providers = bool(sa.data)
 
+            # is_in_theatres is never set here — main.py Step 13 (TMDB
+            # /movie/now_playing) is the only source of truth for it.
             if has_providers:
                 new_theatres, new_streamable = False, True
-            elif media_type == "movie" and recently_released:
-                new_theatres, new_streamable = True, False
             else:
                 new_theatres, new_streamable = False, False
 

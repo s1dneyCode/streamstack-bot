@@ -568,67 +568,6 @@ class SupabaseClient:
         print(f"[Supabase] {len(results)} titles queued for re-verification.")
         return results
 
-    def get_movies_to_update_theatres(self, today: date) -> list[dict]:
-        """
-        Return recently released movies with no theatrical or streaming status set yet.
-
-        Only movies released within the last 90 days are considered in-theatres.
-        Older movies with no providers are left in a neutral state (both false).
-        TV shows are excluded; is_in_theatres is never set for them.
-        """
-        today_str          = today.isoformat()
-        ninety_days_ago    = (today - timedelta(days=90)).isoformat()
-        try:
-            response = (
-                self.client.table("media")
-                .select("id, tmdb_id, title, media_type")
-                .eq("media_type", "movie")
-                .lte("release_date", today_str)
-                .gte("release_date", ninety_days_ago)
-                .eq("is_in_theatres", False)
-                .eq("is_streamable_now", False)
-                .execute()
-            )
-            rows = response.data or []
-        except Exception as exc:
-            print(f"[Supabase] Error fetching movies to update theatres: {exc}")
-            rows = []
-
-        print(f"[Supabase] {len(rows)} movies to mark as in theatres.")
-        return rows
-
-    def get_titles_leaving_theatres(self) -> list[dict]:
-        """
-        Return titles that are marked in-theatres but now have streaming availability.
-
-        Uses an inner join so only titles with at least one streaming_availability
-        row are returned.
-        """
-        try:
-            response = (
-                self.client.table("media")
-                .select("id, tmdb_id, title, media_type, streaming_availability(media_id)")
-                .eq("is_in_theatres", True)
-                .execute()
-            )
-            rows = [row for row in (response.data or []) if row.get("streaming_availability")]
-        except Exception as exc:
-            print(f"[Supabase] Error fetching titles leaving theatres: {exc}")
-            rows = []
-
-        print(f"[Supabase] {len(rows)} titles moving from theatres to streaming.")
-        return rows
-
-    def update_theatres_status(self, media_id: int, is_in_theatres: bool, is_streamable_now: bool) -> None:
-        """Update is_in_theatres and is_streamable_now for a media row."""
-        try:
-            self.client.table("media").update({
-                "is_in_theatres": is_in_theatres,
-                "is_streamable_now": is_streamable_now,
-            }).eq("id", media_id).execute()
-        except Exception as exc:
-            print(f"[Supabase] Error updating theatre status for media_id={media_id}: {exc}")
-
     def get_movies_missing_rt_score(self, today: date) -> list[dict]:
         """
         Return released movies with no RT score that are due for a retry.
