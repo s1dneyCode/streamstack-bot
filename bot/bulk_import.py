@@ -209,6 +209,10 @@ def main() -> None:
     print("\n[BULK] Step 6ac: discover TV shows on Crunchyroll...")
     provider_tv_crunchyroll = tmdb.get_discover_by_provider("tv", 283, pages=50, genre_map=tv_genre_map)
 
+    # HIDIVE is TV/anime only — no movie catalog
+    print("\n[BULK] Step 6ad: discover TV shows on HIDIVE...")
+    provider_tv_hidive = tmdb.get_discover_by_provider("tv", 430, pages=50, genre_map=tv_genre_map)
+
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
     # ------------------------------------------------------------------ #
@@ -239,6 +243,7 @@ def main() -> None:
         + provider_movies_paramount + provider_tv_paramount
         + provider_movies_peacock + provider_tv_peacock
         + provider_movies_crunchyroll + provider_tv_crunchyroll
+        + provider_tv_hidive
     )
 
     for item in all_sources:

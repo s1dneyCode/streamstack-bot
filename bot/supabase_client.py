@@ -56,6 +56,7 @@ ALLOWED_PROVIDERS = frozenset({
     'AMC+', 'AMC+ Amazon Channel', 'AMC Plus Apple TV Channel',
     'MGM Plus', 'MGM Plus Roku Premium Channel', 'MGM+ Amazon Channel',
     'Amazon Video', 'Apple TV Store',
+    'HiDive', 'Hidive Amazon Channel',
 })
 
 
