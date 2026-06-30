@@ -32,7 +32,16 @@ def load_env() -> dict[str, str]:
 
 
 def fetch_all_media(db: SupabaseClient) -> list[dict]:
-    """Fetch id, tmdb_id, title, media_type for every row in public.media."""
+    """
+    Fetch id, tmdb_id, title, media_type for every row in public.media,
+    ordered by streaming_last_checked ascending (nulls first).
+
+    This makes the script naturally resumable: never-checked titles come
+    first, then oldest-checked-first. If a prior run was interrupted, the
+    titles it already processed have a recent streaming_last_checked and
+    sort to the back, so a re-run picks up roughly where it left off
+    without any separate checkpoint file.
+    """
     print("[BACKFILL] Fetching all media rows from Supabase...")
     rows: list[dict] = []
     page_size = 1000
@@ -42,6 +51,7 @@ def fetch_all_media(db: SupabaseClient) -> list[dict]:
         response = (
             db.client.table("media")
             .select("id, tmdb_id, title, media_type")
+            .order("streaming_last_checked", desc=False, nullsfirst=True)
             .range(offset, offset + page_size - 1)
             .execute()
         )
