@@ -285,7 +285,13 @@ def main() -> None:
         is_historical_tv = item.get("media_type") == "tv" and release_year is not None and release_year < 2015
 
         if is_historical_tv:
-            threshold = 300 if item.get("original_language") == "ja" else 150
+            lang = item.get("original_language")
+            if lang == "ja":
+                threshold = 300
+            elif lang == "ko":
+                threshold = 200
+            else:
+                threshold = 150
             if votes < threshold:
                 return False
             genre_list = [g for g in item.get("genre", "").split(", ") if g]
