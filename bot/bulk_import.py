@@ -287,13 +287,15 @@ def main() -> None:
         if is_historical_tv:
             lang = item.get("original_language")
             if lang == "ja":
-                threshold = 300
+                if votes < 300:
+                    return False
             elif lang == "ko":
-                threshold = 200
+                tmdb_score = item.get("tmdb_score") or 0
+                if not (votes >= 200 or (votes >= 50 and tmdb_score >= 75)):
+                    return False
             else:
-                threshold = 150
-            if votes < threshold:
-                return False
+                if votes < 150:
+                    return False
             genre_list = [g for g in item.get("genre", "").split(", ") if g]
             if any(g in _HISTORICAL_TV_EXCLUDED_GENRES for g in genre_list):
                 return False
