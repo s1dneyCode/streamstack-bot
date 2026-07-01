@@ -213,6 +213,40 @@ def main() -> None:
     print("\n[BULK] Step 6ad: discover TV shows on HIDIVE...")
     provider_tv_hidive = tmdb.get_discover_by_provider("tv", 430, pages=50, genre_map=tv_genre_map)
 
+    # Language-based discover — vote_count.desc, vote_average >= 7.0, vote_count >= 100
+    print("\n[BULK] Step 6ae: discover Korean TV shows (by language)...")
+    lang_tv_ko = tmdb.get_discover_by_language("tv", "ko", pages=50, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6af: discover Korean movies (by language)...")
+    lang_movies_ko = tmdb.get_discover_by_language("movie", "ko", pages=30, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6ag: discover Spanish TV shows (by language)...")
+    lang_tv_es = tmdb.get_discover_by_language("tv", "es", pages=30, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6ah: discover Japanese TV shows (by language)...")
+    lang_tv_ja = tmdb.get_discover_by_language("tv", "ja", pages=30, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6ai: discover French TV shows (by language)...")
+    lang_tv_fr = tmdb.get_discover_by_language("tv", "fr", pages=20, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6aj: discover German TV shows (by language)...")
+    lang_tv_de = tmdb.get_discover_by_language("tv", "de", pages=20, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6ak: discover Italian TV shows (by language)...")
+    lang_tv_it = tmdb.get_discover_by_language("tv", "it", pages=20, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6al: discover Spanish movies (by language)...")
+    lang_movies_es = tmdb.get_discover_by_language("movie", "es", pages=20, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6am: discover French movies (by language)...")
+    lang_movies_fr = tmdb.get_discover_by_language("movie", "fr", pages=20, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6an: discover German movies (by language)...")
+    lang_movies_de = tmdb.get_discover_by_language("movie", "de", pages=20, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6ao: discover Italian movies (by language)...")
+    lang_movies_it = tmdb.get_discover_by_language("movie", "it", pages=20, genre_map=movie_genre_map)
+
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
     # ------------------------------------------------------------------ #
@@ -244,6 +278,9 @@ def main() -> None:
         + provider_movies_peacock + provider_tv_peacock
         + provider_movies_crunchyroll + provider_tv_crunchyroll
         + provider_tv_hidive
+        + lang_tv_ko + lang_movies_ko
+        + lang_tv_es + lang_tv_ja + lang_tv_fr + lang_tv_de + lang_tv_it
+        + lang_movies_es + lang_movies_fr + lang_movies_de + lang_movies_it
     )
 
     for item in all_sources:
