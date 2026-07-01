@@ -478,7 +478,8 @@ class SupabaseClient:
           - In Theatres recent   (in theatres, released ≤ 60d ago)   — every 7 days
           - In Theatres old      (in theatres, released > 60d ago)   — every 30 days
           - Streamable           (is_streamable_now = true)          — every 30 days
-          - Old titles           (released > 365d ago)               — every 90 days
+          - Recent (90-365d ago) critical streaming window           — every 30 days or never checked
+          - Old titles           (released > 365d ago)               — every 90 days or never checked
 
         TV-specific categories (no providers yet):
           - TV released ≤ 30 days ago, not streamable               — every 3 days
@@ -531,10 +532,17 @@ class SupabaseClient:
                 .lt("streaming_last_checked", thirty_days_ago)
                 .execute()).data or [])
 
-            # Old titles — stale after 90 days
+            # Recent titles (90-365d ago) — critical streaming window, stale after 30 days
+            _add((self.client.table("media").select(cols)
+                .lt("release_date", ninety_days_ago)
+                .gte("release_date", one_year_ago)
+                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{thirty_days_ago}")
+                .execute()).data or [])
+
+            # Old titles (> 365d ago) — stale after 90 days
             _add((self.client.table("media").select(cols)
                 .lt("release_date", one_year_ago)
-                .lt("streaming_last_checked", ninety_days_ago)
+                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{ninety_days_ago}")
                 .execute()).data or [])
 
             # TV: released in last 30 days, not yet streamable — stale after 3 days
