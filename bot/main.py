@@ -447,7 +447,7 @@ def main() -> None:
     # Add flag to now_playing movies that exist in the DB but aren't flagged yet
     np_in_db = (
         db.client.table("media")
-        .select("id, tmdb_id, title")
+        .select("id, tmdb_id, title, status")
         .eq("media_type", "movie")
         .in_("tmdb_id", list(now_playing_tmdb_ids))
         .execute()
@@ -456,7 +456,10 @@ def main() -> None:
     added = 0
     for row in np_in_db:
         if row["tmdb_id"] not in currently_in_theatres_set:
-            db.client.table("media").update({"is_in_theatres": True}).eq("id", row["id"]).execute()
+            update_payload = {"is_in_theatres": True}
+            if row.get("status") in ("Planned", "Post Production"):
+                update_payload["status"] = "Released"
+            db.client.table("media").update(update_payload).eq("id", row["id"]).execute()
             print(f"[BOT] Step 13 {row['title']}: marked IN THEATRES")
             added += 1
 
