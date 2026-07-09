@@ -1,0 +1,39 @@
+name: Full Backfill — After Bulk Import
+
+on:
+  workflow_dispatch:
+
+jobs:
+  full-backfill-after-bulkimport:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 1 - Enrich new titles
+        continue-on-error: true
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.enrich_new_titles
+
+      - name: 2 - Backfill states
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_states
+
+      - name: 3 - Cleanup short films
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.cleanup_short_films
