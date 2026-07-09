@@ -247,6 +247,12 @@ def main() -> None:
     print("\n[BULK] Step 6ao: discover Italian movies (by language)...")
     lang_movies_it = tmdb.get_discover_by_language("movie", "it", pages=20, genre_map=movie_genre_map)
 
+    print("\n[BULK] Step 6ap: discover Filipino TV shows (by language)...")
+    lang_tv_tl = tmdb.get_discover_by_language("tv", "tl", pages=20, genre_map=tv_genre_map)
+
+    print("\n[BULK] Step 6aq: discover Filipino movies (by language)...")
+    lang_movies_tl = tmdb.get_discover_by_language("movie", "tl", pages=20, genre_map=movie_genre_map)
+
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
     # ------------------------------------------------------------------ #
@@ -281,6 +287,7 @@ def main() -> None:
         + lang_tv_ko + lang_movies_ko
         + lang_tv_es + lang_tv_ja + lang_tv_fr + lang_tv_de + lang_tv_it
         + lang_movies_es + lang_movies_fr + lang_movies_de + lang_movies_it
+        + lang_tv_tl + lang_movies_tl
     )
 
     for item in all_sources:
@@ -294,12 +301,13 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Step 7b — Quality filters (language + tiered vote_count)            #
     # ------------------------------------------------------------------ #
-    _ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh'}
+    _ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh', 'tl'}
     _CUTOFF_DATE = date.today() - timedelta(days=365)
     _HISTORICAL_TV_EXCLUDED_GENRES = {'Kids', 'Soap', 'Talk'}
 
     def _passes_filters(item: dict) -> bool:
-        if item.get("original_language") not in _ALLOWED_LANGUAGES:
+        lang = item.get("original_language")
+        if lang not in _ALLOWED_LANGUAGES:
             return False
 
         votes = item.get("vote_count") or 0
@@ -322,11 +330,14 @@ def main() -> None:
         is_historical_tv = item.get("media_type") == "tv" and release_year is not None and release_year < 2015
 
         if is_historical_tv:
-            lang = item.get("original_language")
             if lang == "ja":
                 if votes < 300:
                     return False
             elif lang == "ko":
+                tmdb_score = item.get("tmdb_score") or 0
+                if not (votes >= 200 or (votes >= 50 and tmdb_score >= 75)):
+                    return False
+            elif lang == "tl":
                 tmdb_score = item.get("tmdb_score") or 0
                 if not (votes >= 200 or (votes >= 50 and tmdb_score >= 75)):
                     return False
@@ -337,9 +348,18 @@ def main() -> None:
             if any(g in _HISTORICAL_TV_EXCLUDED_GENRES for g in genre_list):
                 return False
         else:
-            threshold = 100 if is_recent else 200
-            if votes < threshold:
-                return False
+            if lang == "ko":
+                tmdb_score = item.get("tmdb_score") or 0
+                if not (votes >= 200 or (votes >= 50 and tmdb_score >= 75)):
+                    return False
+            elif lang == "tl":
+                tmdb_score = item.get("tmdb_score") or 0
+                if not (votes >= 200 or (votes >= 50 and tmdb_score >= 75)):
+                    return False
+            else:
+                threshold = 100 if is_recent else 200
+                if votes < threshold:
+                    return False
 
         if item.get("media_type") == "movie":
             runtime = item.get("runtime")

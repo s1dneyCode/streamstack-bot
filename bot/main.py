@@ -26,7 +26,7 @@ from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELE
 
 # Mirrors _ALLOWED_LANGUAGES in bulk_import.py (source of truth) — duplicated
 # here because that constant is function-local there, not importable.
-_ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh'}
+_ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh', 'tl'}
 
 
 def load_env() -> dict[str, str]:
