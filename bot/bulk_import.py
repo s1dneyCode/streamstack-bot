@@ -441,6 +441,7 @@ def main() -> None:
             "genres":      [g for g in item.get("genre", "").split(", ") if g],
             "imdb_id":     item.get("imdb_id"),
             "popularity":  item.get("popularity", 0.0),
+            "vote_count":  item.get("vote_count", 0),
             "is_in_theatres":    False,
             "is_streamable_now": False,
         }
