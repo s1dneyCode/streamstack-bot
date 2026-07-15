@@ -362,6 +362,12 @@ def main() -> None:
                     return False
 
         if item.get("media_type") == "movie":
+            # Lower score threshold for pre-2005 movies with strong audience (cult classics)
+            tmdb_score = item.get("tmdb_score") or 0
+            is_cult_classic = release_year is not None and release_year < 2005 and votes >= 500
+            if not is_cult_classic and tmdb_score < 65:
+                return False
+
             runtime = item.get("runtime")
             if runtime is not None and runtime < 40:
                 return False
