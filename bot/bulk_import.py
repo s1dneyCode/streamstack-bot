@@ -253,6 +253,33 @@ def main() -> None:
     print("\n[BULK] Step 6aq: discover Filipino movies (by language)...")
     lang_movies_tl = tmdb.get_discover_by_language("movie", "tl", pages=20, genre_map=movie_genre_map)
 
+    # Year-based movie endpoints, extended historical range (1980-2017) —
+    # pages tiered down by decade since older years have far fewer titles
+    # indexed on TMDB with meaningful vote_count.
+    print("\n[BULK] Step 6ar: discover movies by year (1980-2017, historical)...")
+    _MOVIE_YEAR_TIERS: list[tuple[range, int]] = [
+        (range(2015, 2018), 20),
+        (range(2000, 2015), 15),
+        (range(1990, 2000), 10),
+        (range(1980, 1990), 8),
+    ]
+    year_movies_historical: list[dict] = []
+    for year_range, pages in _MOVIE_YEAR_TIERS:
+        for year in year_range:
+            year_movies_historical += tmdb.get_discover_movies_by_year(year, pages=pages, genre_map=movie_genre_map)
+
+    print("\n[BULK] Step 6as: discover TV shows by year (1980-2017, historical)...")
+    _TV_YEAR_TIERS: list[tuple[range, int]] = [
+        (range(2015, 2018), 20),
+        (range(2010, 2015), 15),
+        (range(2000, 2010), 10),
+        (range(1980, 2000), 5),
+    ]
+    year_tv_historical: list[dict] = []
+    for year_range, pages in _TV_YEAR_TIERS:
+        for year in year_range:
+            year_tv_historical += tmdb.get_discover_tv_by_year(year, pages=pages, genre_map=tv_genre_map)
+
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
     # ------------------------------------------------------------------ #
@@ -273,6 +300,7 @@ def main() -> None:
         + year_movies_2020 + year_movies_2019 + year_movies_2018
         + year_tv_2023 + year_tv_2022 + year_tv_2021
         + year_tv_2020 + year_tv_2019 + year_tv_2018
+        + year_movies_historical + year_tv_historical
         + historical_tv_non_ja + historical_tv_ja
         + provider_movies_netflix + provider_tv_netflix
         + provider_movies_amazon + provider_tv_amazon
