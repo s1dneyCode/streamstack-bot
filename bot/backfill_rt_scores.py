@@ -1,13 +1,18 @@
 """
-One-time backfill: populate rt_score for all movies in public.media using OMDb.
+One-time backfill: populate rt_score for movies in public.media using OMDb.
 
 TV shows are skipped — OMDb does not provide RT scores for series.
 
 Phase 1: fill missing imdb_ids via TMDB external_ids endpoint.
 Phase 2: update RT scores using OMDb, with imdb_id as the primary lookup strategy.
 
+By default, Phase 2 only processes movies where rt_score IS NULL (cheap
+enough to run after every bulk import). Pass --force to re-check every
+movie regardless of current rt_score, for periodic full refreshes.
+
 Run via:
     python -m bot.backfill_rt_scores
+    python -m bot.backfill_rt_scores --force
 """
 
 import os
@@ -39,6 +44,7 @@ def extract_year(release_date: str | None) -> str | None:
 
 def main() -> None:
     print("[RT_BACKFILL] Starting RT score backfill...")
+    force = "--force" in sys.argv[1:]
     config = load_env()
 
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
@@ -72,13 +78,14 @@ def main() -> None:
     rows: list[dict] = []
 
     while True:
-        response = (
+        query = (
             db.client.table("media")
             .select("id, tmdb_id, title, media_type, release_date, imdb_id")
             .eq("media_type", "movie")
-            .range(offset, offset + page_size - 1)
-            .execute()
         )
+        if not force:
+            query = query.is_("rt_score", "null")
+        response = query.range(offset, offset + page_size - 1).execute()
         batch = response.data or []
         rows.extend(batch)
         if len(batch) < page_size:
@@ -86,7 +93,8 @@ def main() -> None:
         offset += page_size
 
     total = len(rows)
-    print(f"[RT_BACKFILL] Phase 2: updating RT scores for {total} movies...")
+    scope = "all movies (--force)" if force else "movies missing rt_score"
+    print(f"[RT_BACKFILL] Phase 2: updating RT scores for {total} {scope}...")
 
     updated = 0
     not_found = 0

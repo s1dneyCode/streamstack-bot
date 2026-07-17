@@ -1,8 +1,13 @@
 """
-One-time backfill: populate tmdb_score for all rows in public.media.
+One-time backfill: populate tmdb_score for rows in public.media.
+
+By default, only processes rows where tmdb_score IS NULL or 0 (cheap
+enough to run after every bulk import). Pass --force to re-check every
+row regardless of current tmdb_score, for periodic full refreshes.
 
 Run via:
     python -m bot.backfill_tmdb_scores
+    python -m bot.backfill_tmdb_scores --force
 """
 
 import os
@@ -40,6 +45,7 @@ def fetch_vote_average(tmdb_id: int, media_type: str, api_key: str) -> float | N
 
 def main() -> None:
     print("[TMDB_SCORE] Starting tmdb_score backfill...")
+    force = "--force" in sys.argv[1:]
     config = load_env()
 
     db = create_client(config["SUPABASE_URL"], config["SUPABASE_KEY"])
@@ -50,12 +56,10 @@ def main() -> None:
     rows: list[dict] = []
 
     while True:
-        response = (
-            db.table("media")
-            .select("id, tmdb_id, title, media_type")
-            .range(offset, offset + page_size - 1)
-            .execute()
-        )
+        query = db.table("media").select("id, tmdb_id, title, media_type")
+        if not force:
+            query = query.or_("tmdb_score.is.null,tmdb_score.eq.0")
+        response = query.range(offset, offset + page_size - 1).execute()
         batch = response.data or []
         rows.extend(batch)
         if len(batch) < page_size:
@@ -63,7 +67,8 @@ def main() -> None:
         offset += page_size
 
     total = len(rows)
-    print(f"[TMDB_SCORE] {total} rows to process.")
+    scope = "all rows (--force)" if force else "rows missing tmdb_score"
+    print(f"[TMDB_SCORE] {total} {scope} to process.")
 
     updated = 0
     for i, row in enumerate(rows, start=1):

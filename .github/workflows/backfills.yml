@@ -151,7 +151,7 @@ jobs:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_tmdb_scores
+        run: python -m bot.backfill_tmdb_scores --force
 
   backfill-rt-scores:
     runs-on: ubuntu-latest
@@ -169,7 +169,7 @@ jobs:
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_rt_scores
+        run: python -m bot.backfill_rt_scores --force
 
   backfill-imdb-ids:
     runs-on: ubuntu-latest
