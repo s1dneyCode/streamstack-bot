@@ -280,6 +280,20 @@ def main() -> None:
         for year in year_range:
             year_tv_historical += tmdb.get_discover_tv_by_year(year, pages=pages, genre_map=tv_genre_map)
 
+    # Reality/Documentary TV — lower vote_count floor (20) since these
+    # genres accumulate TMDB votes much more slowly than scripted content.
+    print("\n[BULK] Step 6at: discover Reality TV shows (lower vote_count threshold)...")
+    genre_tv_reality = tmdb.get_discover_tv_by_genre(
+        10764, "Reality", pages=30, genre_map=tv_genre_map,
+        vote_count_gte=20, with_original_language="en",
+    )
+
+    print("\n[BULK] Step 6au: discover Documentary TV shows (lower vote_count threshold)...")
+    genre_tv_documentary = tmdb.get_discover_tv_by_genre(
+        99, "Documentary", pages=30, genre_map=tv_genre_map,
+        vote_count_gte=20, with_original_language="en",
+    )
+
     # ------------------------------------------------------------------ #
     # Step 7 — Combine and deduplicate                                     #
     # ------------------------------------------------------------------ #
@@ -301,6 +315,7 @@ def main() -> None:
         + year_tv_2023 + year_tv_2022 + year_tv_2021
         + year_tv_2020 + year_tv_2019 + year_tv_2018
         + year_movies_historical + year_tv_historical
+        + genre_tv_reality + genre_tv_documentary
         + historical_tv_non_ja + historical_tv_ja
         + provider_movies_netflix + provider_tv_netflix
         + provider_movies_amazon + provider_tv_amazon
@@ -350,6 +365,8 @@ def main() -> None:
             except ValueError:
                 pass
 
+        genre_list = [g for g in item.get("genre", "").split(", ") if g]
+
         # Historical TV (pre-2015) needs a higher vote_count floor than the
         # standard recent/older tiers — and Japanese needs an even higher one
         # since anime accumulates TMDB votes more slowly. Also excludes
@@ -357,7 +374,20 @@ def main() -> None:
         # at the API level in get_discover_tv_historical().
         is_historical_tv = item.get("media_type") == "tv" and release_year is not None and release_year < 2015
 
-        if is_historical_tv:
+        # Reality/Documentary TV accumulates votes far slower than scripted
+        # content — a flat, lower floor applies instead of the normal tiers.
+        # TV-only: a Documentary movie should fall through to the normal
+        # movie filtering below, not get the lower TV vote-count floor.
+        is_reality_or_documentary = (
+            item.get("media_type") == "tv"
+            and lang == "en"
+            and any(g in ("Reality", "Documentary") for g in genre_list)
+        )
+
+        if is_reality_or_documentary:
+            if votes < 20:
+                return False
+        elif is_historical_tv:
             if lang == "ja":
                 if votes < 300:
                     return False
@@ -372,7 +402,6 @@ def main() -> None:
             else:
                 if votes < 150:
                     return False
-            genre_list = [g for g in item.get("genre", "").split(", ") if g]
             if any(g in _HISTORICAL_TV_EXCLUDED_GENRES for g in genre_list):
                 return False
         else:
