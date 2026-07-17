@@ -673,6 +673,8 @@ class TmdbClient:
         genre_name: str,
         pages: int = 30,
         genre_map: dict[int, str] | None = None,
+        vote_count_gte: int | None = None,
+        with_original_language: str | None = None,
     ) -> list[dict]:
         """Fetch TV shows for a specific genre via /discover/tv sorted by popularity."""
         genre_map = genre_map or {}
@@ -681,15 +683,18 @@ class TmdbClient:
 
         for page in range(1, pages + 1):
             print(f"[TMDB] Fetching page {page}/{pages} of discover TV (genre: {genre_name})...")
-            data = self._get(
-                "/discover/tv",
-                params={
-                    "sort_by": "popularity.desc",
-                    "with_genres": genre_id,
-                    "language": "en-US",
-                    "page": page,
-                },
-            )
+            params = {
+                "sort_by": "popularity.desc",
+                "with_genres": genre_id,
+                "language": "en-US",
+                "page": page,
+            }
+            if vote_count_gte is not None:
+                params["vote_count.gte"] = vote_count_gte
+            if with_original_language is not None:
+                params["with_original_language"] = with_original_language
+
+            data = self._get("/discover/tv", params=params)
 
             for item in data.get("results", []):
                 tmdb_id = item.get("id")
