@@ -22,7 +22,7 @@ jobs:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.enrich_new_titles
+        run: python -m bot.enrich_new_titles --hours=20
 
       - name: 2 - Backfill vote count
         continue-on-error: true

@@ -1,6 +1,7 @@
 """
 Nightly enrichment bot: runs 3 hours after the main nightly bot and populates
-all secondary fields for titles added in the last 6 hours.
+all secondary fields for titles added in the last N hours (default 6, override
+with --hours).
 
 Steps per title (in order):
   1. Images         — upload poster + carousel to Supabase Storage
@@ -15,6 +16,7 @@ Steps per title (in order):
 
 Run via:
     python -m bot.enrich_new_titles
+    python -m bot.enrich_new_titles --hours=20
 """
 
 import os
@@ -61,12 +63,18 @@ def load_env() -> dict[str, str]:
 
 def main() -> None:
     print("[ENRICH] Starting nightly enrichment bot...")
+
+    hours = 6
+    for arg in sys.argv[1:]:
+        if arg.startswith("--hours="):
+            hours = int(arg.split("=")[1])
+
     config = load_env()
 
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
 
-    cutoff     = datetime.utcnow() - timedelta(hours=6)
+    cutoff     = datetime.utcnow() - timedelta(hours=hours)
     cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
     print(f"[ENRICH] Querying titles created since {cutoff_str} UTC...")
 
