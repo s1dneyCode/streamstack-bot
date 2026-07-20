@@ -56,7 +56,15 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_title_logos
 
-      - name: 6 - Backfill certifications
+      - name: 6 - Backfill backdrops
+        continue-on-error: true
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_backdrops
+
+      - name: 7 - Backfill certifications
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -64,7 +72,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_certifications
 
-      - name: 7 - Backfill runtime
+      - name: 8 - Backfill runtime
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -72,7 +80,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_runtime
 
-      - name: 8 - Backfill genres
+      - name: 9 - Backfill genres
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -80,7 +88,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_genres
 
-      - name: 9 - Backfill metadata
+      - name: 10 - Backfill metadata
         continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -88,14 +96,14 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_metadata
 
-      - name: 10 - Backfill states
+      - name: 11 - Backfill states
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_states
 
-      - name: 11 - Cleanup short films
+      - name: 12 - Cleanup short films
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
