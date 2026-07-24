@@ -418,52 +418,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print(f"\n[BOT] Done. {total} new titles added, {skipped} skipped (already exist).")
 
-    # ------------------------------------------------------------------ #
-    # Step 13 — Update is_in_theatres using now_playing as source of truth #
-    # ------------------------------------------------------------------ #
-    print("\n[BOT] Step 13: Updating is_in_theatres from now_playing list...")
-
-    now_playing_tmdb_ids = {item["tmdb_id"] for item in now_playing}
-
-    # Movies currently flagged as in theatres in the DB
-    currently_in_theatres = (
-        db.client.table("media")
-        .select("id, tmdb_id, title")
-        .eq("media_type", "movie")
-        .eq("is_in_theatres", True)
-        .execute()
-        .data or []
-    )
-    currently_in_theatres_set = {row["tmdb_id"] for row in currently_in_theatres}
-
-    # Remove flag from movies no longer in now_playing
-    removed = 0
-    for row in currently_in_theatres:
-        if row["tmdb_id"] not in now_playing_tmdb_ids:
-            db.client.table("media").update({"is_in_theatres": False}).eq("id", row["id"]).execute()
-            print(f"[BOT] Step 13 {row['title']}: removed from IN THEATRES")
-            removed += 1
-
-    # Add flag to now_playing movies that exist in the DB but aren't flagged yet
-    np_in_db = (
-        db.client.table("media")
-        .select("id, tmdb_id, title")
-        .eq("media_type", "movie")
-        .in_("tmdb_id", list(now_playing_tmdb_ids))
-        .execute()
-        .data or []
-    )
-    added = 0
-    for row in np_in_db:
-        if row["tmdb_id"] not in currently_in_theatres_set:
-            # A title confirmed in now_playing is definitionally released —
-            # don't trust TMDB's status field, which lags for some titles.
-            update_payload = {"is_in_theatres": True, "status": "Released"}
-            db.client.table("media").update(update_payload).eq("id", row["id"]).execute()
-            print(f"[BOT] Step 13 {row['title']}: marked IN THEATRES")
-            added += 1
-
-    print(f"[BOT] Step 13 done. {added} movies marked in theatres, {removed} removed from theatres.")
+    # is_in_theatres is now managed by daily_verify.py (runs at 8am UTC)
 
     # ------------------------------------------------------------------ #
     # Step 14 — Check for new seasons on Returning Series                 #

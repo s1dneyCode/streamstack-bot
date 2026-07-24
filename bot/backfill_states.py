@@ -5,11 +5,16 @@ Rules applied:
   Titles with streaming providers     → is_streamable_now=True,  is_in_theatres=False
   Everything else                     → both False
 
-is_in_theatres is never set to True here — main.py Step 13 (TMDB
-/movie/now_playing) is the only source of truth for it.
+is_in_theatres is never set to True here — daily_verify.py (TMDB
+/movie/now_playing, runs daily at 8am UTC) is the only source of truth for it.
+
+Pass --skip-theatres to leave is_in_theatres untouched entirely (only
+is_streamable_now is updated), so this backfill doesn't clobber the fresh
+flags daily_verify.py just set when both run the same day.
 
 Run via:
     python -m bot.backfill_states
+    python -m bot.backfill_states --skip-theatres
 """
 
 import os
@@ -67,6 +72,7 @@ def fetch_paginated(db, table: str, select: str, filters=None) -> list[dict]:
 
 def main() -> None:
     print("[STATES] Starting state backfill...")
+    skip_theatres = "--skip-theatres" in sys.argv[1:]
     config = load_env()
     db = create_client(config["SUPABASE_URL"], config["SUPABASE_KEY"])
 
@@ -93,6 +99,9 @@ def main() -> None:
         old_streamable   = row["is_streamable_now"]
         new_in_theatres, new_streamable = compute_state(row["id"], streaming_ids)
 
+        if skip_theatres:
+            new_in_theatres = old_in_theatres
+
         old_label = state_label(old_in_theatres, old_streamable)
         new_label = state_label(new_in_theatres, new_streamable)
 
@@ -100,10 +109,11 @@ def main() -> None:
             skipped += 1
             continue
 
-        db.table("media").update({
-            "is_in_theatres":   new_in_theatres,
-            "is_streamable_now": new_streamable,
-        }).eq("id", row["id"]).execute()
+        update_payload = {"is_streamable_now": new_streamable}
+        if not skip_theatres:
+            update_payload["is_in_theatres"] = new_in_theatres
+
+        db.table("media").update(update_payload).eq("id", row["id"]).execute()
 
         print(f"[STATES] {i}/{total} {row['title']} ({row['media_type']}): {old_label} → {new_label}")
         updated += 1
