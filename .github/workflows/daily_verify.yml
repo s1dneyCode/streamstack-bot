@@ -1,0 +1,25 @@
+name: Daily Verify
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # 8am UTC daily, after nightly bot (6am UTC)
+  workflow_dispatch:      # manual trigger for testing
+
+jobs:
+  daily-verify:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run daily verify
+        run: python -m bot.daily_verify
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
