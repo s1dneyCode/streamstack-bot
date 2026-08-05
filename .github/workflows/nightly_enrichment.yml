@@ -5,9 +5,14 @@ on:
     - cron: '0 9 * * *'  # 9AM UTC = 6AM Chile, 3h after main nightly bot
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   enrich:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       PYTHONUNBUFFERED: '1'
     steps:

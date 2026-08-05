@@ -109,6 +109,7 @@ def main() -> None:
         "runtimes": 0,
         "genres":   0,
         "states":   0,
+        "errors":   0,
     }
 
     for i, row in enumerate(new_titles, start=1):
@@ -136,6 +137,7 @@ def main() -> None:
                 )
             except Exception as exc:
                 print(f"[ENRICH]   images: failed — {exc}")
+                stats["errors"] += 1
             time.sleep(0.25)
 
         # ── Step 2: Trailers ────────────────────────────────────────────
@@ -154,6 +156,7 @@ def main() -> None:
                 print(f"[ENRICH]   trailers: {n}")
         except Exception as exc:
             print(f"[ENRICH]   trailers: failed — {exc}")
+            stats["errors"] += 1
         time.sleep(0.25)
 
         # ── Step 3: Credits ─────────────────────────────────────────────
@@ -184,6 +187,7 @@ def main() -> None:
                 print(f"[ENRICH]   credits: {n} rows")
         except Exception as exc:
             print(f"[ENRICH]   credits: failed — {exc}")
+            stats["errors"] += 1
         time.sleep(0.25)
 
         # ── Step 4: Seasons (TV only) ────────────────────────────────────
@@ -228,6 +232,7 @@ def main() -> None:
                     print(f"[ENRICH]   seasons: {len(season_rows)} seasons, {ep_count} episodes")
             except Exception as exc:
                 print(f"[ENRICH]   seasons: failed — {exc}")
+                stats["errors"] += 1
             time.sleep(0.25)
 
         # ── Step 5: Title logos ─────────────────────────────────────────
@@ -240,6 +245,7 @@ def main() -> None:
                     print(f"[ENRICH]   logo: ok")
             except Exception as exc:
                 print(f"[ENRICH]   logo: failed — {exc}")
+                stats["errors"] += 1
             time.sleep(0.25)
 
         # ── Step 6: Certifications ──────────────────────────────────────
@@ -252,6 +258,7 @@ def main() -> None:
                     print(f"[ENRICH]   cert: {cert}")
             except Exception as exc:
                 print(f"[ENRICH]   cert: failed — {exc}")
+                stats["errors"] += 1
             time.sleep(0.25)
 
         # ── Step 7: Runtime (movies only) ───────────────────────────────
@@ -265,6 +272,7 @@ def main() -> None:
                     print(f"[ENRICH]   runtime: {runtime} min")
             except Exception as exc:
                 print(f"[ENRICH]   runtime: failed — {exc}")
+                stats["errors"] += 1
             time.sleep(0.25)
 
         # ── Step 8: Genres ──────────────────────────────────────────────
@@ -278,6 +286,7 @@ def main() -> None:
                     print(f"[ENRICH]   genres: {genres}")
             except Exception as exc:
                 print(f"[ENRICH]   genres: failed — {exc}")
+                stats["errors"] += 1
             time.sleep(0.25)
 
         # ── Step 9: States ───────────────────────────────────────────────
@@ -313,6 +322,7 @@ def main() -> None:
                 )
         except Exception as exc:
             print(f"[ENRICH]   states: failed — {exc}")
+            stats["errors"] += 1
 
     # ── Summary ──────────────────────────────────────────────────────────
     print(f"\n[ENRICH] ===== SUMMARY =====")
@@ -326,6 +336,15 @@ def main() -> None:
     print(f"[ENRICH] Runtimes         : {stats['runtimes']}")
     print(f"[ENRICH] Genres           : {stats['genres']}")
     print(f"[ENRICH] States updated   : {stats['states']}")
+
+    enriched_total = (
+        stats["images"] + stats["trailers"] + stats["credits"] + stats["seasons"]
+        + stats["logos"] + stats["certs"] + stats["runtimes"] + stats["genres"] + stats["states"]
+    )
+    print(
+        f"[ENRICH] SUMMARY discovered={total} new_inserted=0 "
+        f"reverified=0 enriched={enriched_total} errors={stats['errors']}"
+    )
 
 
 if __name__ == "__main__":

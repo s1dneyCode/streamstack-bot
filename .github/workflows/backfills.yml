@@ -35,9 +35,14 @@ on:
         required: false
         default: ''
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   backfill-streaming:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'streaming'
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +60,7 @@ jobs:
 
   backfill-popularity:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'popularity'
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +78,7 @@ jobs:
 
   backfill-popularity-score:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'popularity-score'
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +95,7 @@ jobs:
 
   backfill-metadata:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'metadata'
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +113,7 @@ jobs:
 
   backfill-status:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'status'
     steps:
       - uses: actions/checkout@v4
@@ -122,6 +131,7 @@ jobs:
 
   backfill-vote-count:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'vote-count'
     steps:
       - uses: actions/checkout@v4
@@ -139,6 +149,7 @@ jobs:
 
   backfill-tmdb-scores:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'tmdb-scores'
     steps:
       - uses: actions/checkout@v4
@@ -156,6 +167,7 @@ jobs:
 
   backfill-rt-scores:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'rt-scores'
     steps:
       - uses: actions/checkout@v4
@@ -174,6 +186,7 @@ jobs:
 
   backfill-imdb-ids:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'imdb-ids'
     steps:
       - uses: actions/checkout@v4
@@ -191,6 +204,7 @@ jobs:
 
   migrate-images:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'migrate-images'
     steps:
       - uses: actions/checkout@v4
@@ -208,6 +222,7 @@ jobs:
 
   backfill-genres:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'genres'
     steps:
       - uses: actions/checkout@v4
@@ -225,6 +240,7 @@ jobs:
 
   backfill-states:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'states'
     steps:
       - uses: actions/checkout@v4
@@ -241,6 +257,7 @@ jobs:
 
   backfill-trailers:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'trailers'
     steps:
       - uses: actions/checkout@v4
@@ -258,6 +275,7 @@ jobs:
 
   backfill-credits:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'credits'
     steps:
       - uses: actions/checkout@v4
@@ -281,6 +299,7 @@ jobs:
 
   backfill-credits-order:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'credits-order'
     steps:
       - uses: actions/checkout@v4
@@ -298,6 +317,7 @@ jobs:
 
   backfill-runtime:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'runtime'
     steps:
       - uses: actions/checkout@v4
@@ -315,6 +335,7 @@ jobs:
 
   backfill-title-logos:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'title-logos'
     steps:
       - uses: actions/checkout@v4
@@ -332,6 +353,7 @@ jobs:
 
   backfill-backdrops:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'backdrops'
     steps:
       - uses: actions/checkout@v4
@@ -349,6 +371,7 @@ jobs:
 
   backfill-certifications:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'certifications'
     steps:
       - uses: actions/checkout@v4
@@ -366,6 +389,7 @@ jobs:
 
   backfill-seasons:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'seasons'
     steps:
       - uses: actions/checkout@v4
@@ -383,6 +407,7 @@ jobs:
 
   backfill-season-ratings:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'season-ratings'
     steps:
       - uses: actions/checkout@v4
@@ -400,6 +425,7 @@ jobs:
 
   backfill-release-dates:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     if: github.event.inputs.job == 'release-dates'
     steps:
       - uses: actions/checkout@v4

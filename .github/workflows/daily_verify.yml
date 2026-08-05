@@ -5,9 +5,14 @@ on:
     - cron: '0 8 * * *'  # 8am UTC daily, after nightly bot (6am UTC)
   workflow_dispatch:      # manual trigger for testing
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   daily-verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       PYTHONUNBUFFERED: '1'
     steps:

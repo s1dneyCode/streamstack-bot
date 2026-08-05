@@ -1293,17 +1293,22 @@ class TmdbClient:
         ]
         return data.get("vote_average"), episodes
 
-    def get_certification(self, tmdb_id: int, media_type: str) -> str | None:
+    def get_certification(self, tmdb_id: int, media_type: str, data: dict | None = None) -> str | None:
         """
         Return the US content certification for a title.
 
         Movies  → /movie/{id}/release_dates: find iso_3166_1=='US', take the
                   first release_date entry with a non-empty certification.
         TV      → /tv/{id}/content_ratings: find iso_3166_1=='US', take rating.
+
+        For movies, pass a pre-fetched /movie/{id}/release_dates payload via
+        *data* to avoid a second request when the caller already has one
+        (see get_movie_release_dates).
         """
         try:
             if media_type == "movie":
-                data = self._get(f"/movie/{tmdb_id}/release_dates")
+                if data is None:
+                    data = self._get(f"/movie/{tmdb_id}/release_dates")
                 for country in data.get("results", []):
                     if country.get("iso_3166_1") == "US":
                         for entry in country.get("release_dates", []):
@@ -1320,7 +1325,7 @@ class TmdbClient:
             print(f"[TMDB] Could not fetch certification for {media_type}/{tmdb_id}: {exc}")
         return None
 
-    def get_movie_release_dates(self, tmdb_id: int) -> tuple[str | None, str | None]:
+    def get_movie_release_dates(self, tmdb_id: int, data: dict | None = None) -> tuple[str | None, str | None]:
         """
         Return (release_date, us_release_date) for a movie from
         /movie/{id}/release_dates.
@@ -1329,12 +1334,17 @@ class TmdbClient:
                             (worldwide premiere, used as the canonical date).
         us_release_date   → earliest US release date with type == 3
                             (Theatrical) or type == 4 (Digital).
+
+        Pass a pre-fetched /movie/{id}/release_dates payload via *data* to
+        avoid a second request when the caller already has one (see
+        get_certification).
         """
-        try:
-            data = self._get(f"/movie/{tmdb_id}/release_dates")
-        except Exception as exc:
-            print(f"[TMDB] Could not fetch release dates for movie/{tmdb_id}: {exc}")
-            return None, None
+        if data is None:
+            try:
+                data = self._get(f"/movie/{tmdb_id}/release_dates")
+            except Exception as exc:
+                print(f"[TMDB] Could not fetch release dates for movie/{tmdb_id}: {exc}")
+                return None, None
 
         all_dates: list[str] = []
         us_dates: list[str] = []

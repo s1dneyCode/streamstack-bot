@@ -3,9 +3,14 @@ name: Full Backfill — New Data
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   full-backfill-new:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     env:
       PYTHONUNBUFFERED: '1'
     steps:
@@ -17,7 +22,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 1 - Migrate images
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -25,7 +29,6 @@ jobs:
         run: python -m bot.migrate_images
 
       - name: 2 - Backfill trailers
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -33,7 +36,6 @@ jobs:
         run: python -m bot.backfill_trailers
 
       - name: 3 - Backfill credits
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -41,7 +43,6 @@ jobs:
         run: python -m bot.backfill_credits
 
       - name: 4 - Backfill seasons
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -49,7 +50,6 @@ jobs:
         run: python -m bot.backfill_seasons
 
       - name: 5 - Backfill title logos
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -57,7 +57,6 @@ jobs:
         run: python -m bot.backfill_title_logos
 
       - name: 6 - Backfill backdrops
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -65,7 +64,6 @@ jobs:
         run: python -m bot.backfill_backdrops
 
       - name: 7 - Backfill certifications
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -73,7 +71,6 @@ jobs:
         run: python -m bot.backfill_certifications
 
       - name: 8 - Backfill runtime
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -81,7 +78,6 @@ jobs:
         run: python -m bot.backfill_runtime
 
       - name: 9 - Backfill genres
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -89,7 +85,6 @@ jobs:
         run: python -m bot.backfill_genres
 
       - name: 10 - Backfill metadata
-        continue-on-error: true
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -97,14 +92,12 @@ jobs:
         run: python -m bot.backfill_metadata
 
       - name: 11 - Backfill states
-        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_states
 
       - name: 12 - Cleanup short films
-        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

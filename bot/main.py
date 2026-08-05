@@ -191,6 +191,8 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 9: Enriching and saving new titles...")
     total = len(new_items)
+    step9_inserted = 0
+    step9_failed   = 0
 
     for index, item in enumerate(new_items, start=1):
         title      = item["title"]
@@ -207,6 +209,7 @@ def main() -> None:
         genres            = [g for g in item.get("genre", "").split(", ") if g]
         release_date      = item.get("release_date")
         us_release_date   = None
+        release_dates_data = None
 
         if media_type == "tv":
             try:
@@ -231,7 +234,13 @@ def main() -> None:
             except Exception:
                 pass
 
-            worldwide_date, us_release_date = tmdb.get_movie_release_dates(tmdb_id=tmdb_id)
+            try:
+                release_dates_data = tmdb._get(f"/movie/{tmdb_id}/release_dates")
+            except Exception as exc:
+                print(f"[TMDB] Could not fetch release dates for movie/{tmdb_id}: {exc}")
+                release_dates_data = {}
+
+            worldwide_date, us_release_date = tmdb.get_movie_release_dates(tmdb_id=tmdb_id, data=release_dates_data)
             if worldwide_date:
                 release_date = worldwide_date
 
@@ -268,9 +277,10 @@ def main() -> None:
             "imdb_id":      item.get("imdb_id"),
             "runtime":      runtime,
             "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type),
-            "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type),
+            "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type, data=release_dates_data),
             "genres":         genres,
             "vote_count":     vote_count,
+            "tmdb_score":     item.get("tmdb_score", 0),
             "status":         status,
             "original_language": original_language,
             "is_documentary":    is_documentary,
@@ -279,9 +289,12 @@ def main() -> None:
 
         media_id = db.upsert_media(media_record)
         if media_id:
+            step9_inserted += 1
             if any(watch_providers.values()):
                 db.upsert_streaming_availability(media_id=media_id, providers=watch_providers)
             db.update_streaming_last_checked(media_id)
+        else:
+            step9_failed += 1
         print(f"[BOT] Step 9 {index}/{total}: {title} (status={status or 'unknown'})")
 
     # Load reverify list for Steps 10, 10b and 11
@@ -417,6 +430,10 @@ def main() -> None:
     # Step 12 — Summary                                                    #
     # ------------------------------------------------------------------ #
     print(f"\n[BOT] Done. {total} new titles added, {skipped} skipped (already exist).")
+    print(
+        f"[BOT] SUMMARY discovered={len(combined)} new_inserted={step9_inserted} "
+        f"reverified={reverified} enriched={rt_updated + rt_recovered} errors={step9_failed}"
+    )
 
     # is_in_theatres is now managed by daily_verify.py (runs at 8am UTC)
 
