@@ -3,12 +3,21 @@ name: Nightly Bot
 on:
   schedule:
     - cron: '0 6 * * *'      # nightly at 06:00 UTC
-    - cron: '0 6 1 * *'      # monthly cleanup: 1st of each month at 06:00 UTC (03:00 Chile)
+    # DISABLED 2026-08-05 — monthly cleanup was deleting rows CASCADE-referenced
+    # by user data (reviews, watchlists, favorites, etc). Do not re-enable this
+    # cron until cleanup_low_quality.py's user-anchored-title guard ships AND
+    # is verified. See the `monthly-cleanup` job's `if: false` gate below.
+    # - cron: '0 6 1 * *'      # monthly cleanup: 1st of each month at 06:00 UTC (03:00 Chile)
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,7 +35,14 @@ jobs:
 
   monthly-cleanup:
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' && startsWith(github.event.schedule, '0 6 1')
+    # HARD-DISABLED 2026-08-05 — see cron comment above. This job deletes rows
+    # that user data (reviews/watchlists/favorites/etc) CASCADE-references.
+    # Do not flip this back on without the user-anchored-title guard in
+    # cleanup_low_quality.py AND an --apply flag on the run command below.
+    if: false
+    # Original trigger condition, restore alongside the cron line once fixed:
+    # if: github.event_name == 'schedule' && startsWith(github.event.schedule, '0 6 1')
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,4 +54,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.cleanup_low_quality
+        # --apply is required here — without it cleanup_low_quality.py only
+        # logs what it would delete and mutates nothing (see script docstring).
+        run: python -m bot.cleanup_low_quality --apply

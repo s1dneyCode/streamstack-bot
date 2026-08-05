@@ -1,8 +1,22 @@
 """
 Monthly cleanup: delete low-quality titles that have accumulated no traction.
 
-A title is deleted when it meets ANY elimination condition and NO protection
-condition.
+SAFETY: dry-run by default. Pass --apply to actually delete rows; without
+it, this only logs what it would remove and mutates nothing.
+
+Before evaluating anything else, a title is skipped unconditionally if its
+media.id is referenced by any of the following user-generated tables/columns
+(all ON DELETE CASCADE into media — deleting the title would silently
+destroy that user's data):
+  reviews.media_id, review_drafts.media_id, library_watched.media_id,
+  library_watched_episodes.media_id, library_watchlist.media_id,
+  user_favorites.media_id, community_post_media.media_id,
+  community_posts.trailer_media_id, community_post_drafts.trailer_media_id,
+  group_message_media.media_id, group_messages.shared_media_id,
+  group_messages.trailer_media_id
+
+A title is deleted when it meets ANY elimination condition, is NOT
+user-anchored (above), and NO protection condition below applies.
 
 Protection conditions (any true -> never delete):
   - is_streamable_now = true
@@ -20,15 +34,16 @@ Elimination conditions (evaluated only when not protected):
       release_year < 2010             -> eliminate if vote_count < 1000
 
 A separate, unconditional pass then deletes short films: movies with a
-known runtime < 40 min, not in theatres, not streamable. This exists
-because bulk_import.py's insert-time runtime filter never actually
-triggers (movie list/discover endpoints don't return runtime, only the
-detail endpoint does), so short films can slip into the catalog and
-only get caught here once backfill_runtime.py fills in the real value.
+known runtime < 40 min, not in theatres, not streamable, and not
+user-anchored (same guard as above). This exists because bulk_import.py's
+insert-time runtime filter never actually triggers (movie list/discover
+endpoints don't return runtime, only the detail endpoint does), so short
+films can slip into the catalog and only get caught here once
+backfill_runtime.py fills in the real value.
 
 Run via:
-    python -m bot.cleanup_low_quality
-    python -m bot.cleanup_low_quality --dry-run
+    python -m bot.cleanup_low_quality            # dry run — logs only
+    python -m bot.cleanup_low_quality --apply    # actually deletes
 """
 
 import os
@@ -38,6 +53,23 @@ from datetime import date, timedelta
 from .supabase_client import SupabaseClient
 
 PAGE_SIZE = 1000
+
+# (table, column) pairs that CASCADE-reference media(id) from user-generated
+# data. Any media.id appearing in one of these is never eligible for deletion.
+PROTECTED_SOURCES: list[tuple[str, str]] = [
+    ("reviews", "media_id"),
+    ("review_drafts", "media_id"),
+    ("library_watched", "media_id"),
+    ("library_watched_episodes", "media_id"),
+    ("library_watchlist", "media_id"),
+    ("user_favorites", "media_id"),
+    ("community_post_media", "media_id"),
+    ("community_posts", "trailer_media_id"),
+    ("community_post_drafts", "trailer_media_id"),
+    ("group_message_media", "media_id"),
+    ("group_messages", "shared_media_id"),
+    ("group_messages", "trailer_media_id"),
+]
 
 
 def load_env() -> dict[str, str]:
@@ -50,6 +82,36 @@ def load_env() -> dict[str, str]:
             sys.exit(1)
         config[key] = value
     return config
+
+
+def fetch_protected_media_ids(db: SupabaseClient) -> set:
+    """
+    Return every media.id referenced by user-generated data (see
+    PROTECTED_SOURCES). These are never eligible for deletion.
+
+    Deliberately does not catch exceptions: a failed query here means an
+    incomplete (unsafe) protection set, so the whole run should abort
+    loudly rather than risk deleting a user-anchored title.
+    """
+    protected: set = set()
+    for table, column in PROTECTED_SOURCES:
+        before = len(protected)
+        offset = 0
+        while True:
+            batch = (
+                db.client.table(table)
+                .select(column)
+                .not_.is_(column, "null")
+                .range(offset, offset + PAGE_SIZE - 1)
+                .execute()
+                .data or []
+            )
+            protected.update(row[column] for row in batch if row.get(column) is not None)
+            if len(batch) < PAGE_SIZE:
+                break
+            offset += PAGE_SIZE
+        print(f"[CLEANUP] {table}.{column}: {len(protected) - before} new protected id(s).")
+    return protected
 
 
 def fetch_rent_buy_media_ids(db: SupabaseClient) -> set[str]:
@@ -122,9 +184,14 @@ def _vote_threshold(release_year: int) -> int:
     return 1000
 
 
-def evaluate(row: dict, rent_buy_ids: set[str], today: date) -> tuple[bool, int | None, bool]:
+def evaluate(row: dict, rent_buy_ids: set[str], protected_ids: set, today: date) -> tuple[bool, int | None, bool]:
     """Return (should_delete, release_year, has_rent_buy) for a media row."""
-    media_id       = row["id"]
+    media_id = row["id"]
+
+    # --- User-anchored: absolute override, never delete --------------------
+    if media_id in protected_ids:
+        return False, None, False
+
     vote_count     = row.get("vote_count") or 0
     poster_path    = row.get("poster_path")
     is_streamable  = row.get("is_streamable_now") or False
@@ -163,12 +230,16 @@ def evaluate(row: dict, rent_buy_ids: set[str], today: date) -> tuple[bool, int 
 
 
 def main() -> None:
-    dry_run = "--dry-run" in sys.argv[1:]
-    print(f"[CLEANUP] Starting low-quality title cleanup{' (dry run)' if dry_run else ''}...")
+    apply_changes = "--apply" in sys.argv[1:]
+    print(f"[CLEANUP] Starting low-quality title cleanup{'' if apply_changes else ' (dry run — pass --apply to delete)'}...")
     config = load_env()
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
     today = date.today()
+
+    print("[CLEANUP] Fetching user-anchored media ids (never delete these)...")
+    protected_ids = fetch_protected_media_ids(db)
+    print(f"[CLEANUP] {len(protected_ids)} title(s) protected by user data.")
 
     print("[CLEANUP] Fetching rent/buy streaming coverage...")
     rent_buy_ids = fetch_rent_buy_media_ids(db)
@@ -178,7 +249,7 @@ def main() -> None:
 
     to_delete: list[dict] = []
     for row in all_media:
-        should_delete, release_year, has_rent_buy = evaluate(row, rent_buy_ids, today)
+        should_delete, release_year, has_rent_buy = evaluate(row, rent_buy_ids, protected_ids, today)
         if should_delete:
             to_delete.append({**row, "release_year": release_year, "has_rent_buy": has_rent_buy})
 
@@ -191,7 +262,7 @@ def main() -> None:
             f"is_streamable_now={row.get('is_streamable_now')}, has_rent_buy={row['has_rent_buy']})"
         )
 
-    if dry_run:
+    if not apply_changes:
         print(f"[CLEANUP] Dry run — no titles deleted. {total} would have been deleted.")
     else:
         deleted = 0
@@ -212,14 +283,14 @@ def main() -> None:
     # Short film cleanup                                                  #
     # ------------------------------------------------------------------ #
     print("\n[CLEANUP] Fetching short films...")
-    short_films = fetch_short_films(db)
+    short_films = [row for row in fetch_short_films(db) if row["id"] not in protected_ids]
 
     total_short = len(short_films)
     print(f"[CLEANUP] {total_short} short films matched deletion criteria.")
     for row in short_films:
         print(f"[CLEANUP] Would delete: {row['title']} (runtime={row.get('runtime')}min)")
 
-    if dry_run:
+    if not apply_changes:
         print(f"[CLEANUP] Dry run — no short films deleted. {total_short} would have been deleted.")
         return
 
