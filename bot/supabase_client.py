@@ -566,15 +566,24 @@ class SupabaseClient:
         it should have left untouched (e.g. a cursor) on a transient blip.
         Callers that want the old graceful-degrade-to-default behavior
         should catch this explicitly.
+
+        Deliberately uses a plain .select() rather than .maybe_single() —
+        in this supabase-py version, .execute() on a maybe_single() query
+        returns None (not a response object) for zero matching rows, which
+        turned the perfectly normal "key not set yet" case into an
+        AttributeError on row.data that looked like a genuine failure to
+        every caller. A plain .select() always returns a response object
+        with a .data list, empty or not, so "zero rows" and "the request
+        itself failed" stay distinguishable.
         """
-        row = (
+        response = (
             self.client.table("bot_state")
             .select("value")
             .eq("key", key)
-            .maybe_single()
             .execute()
         )
-        return row.data.get("value") if row.data else None
+        rows = response.data or []
+        return rows[0]["value"] if rows else None
 
     def set_bot_state(self, key: str, value) -> None:
         """Upsert *value* (any JSON-serializable object) under *key* in bot_state."""
