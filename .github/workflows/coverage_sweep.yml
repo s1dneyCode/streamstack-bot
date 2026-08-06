@@ -7,9 +7,8 @@ on:
         description: 'Discover pages to process this run'
         required: false
         default: '20'
-  # Cron disabled until manually validated — workflow_dispatch-only for now.
-  # schedule:
-  #   - cron: '0 10 * * *'  # 10am UTC daily — after nightly (6am), sync changes (7am), daily verify (8am), enrichment (9am)
+  schedule:
+    - cron: '0 10 * * *'  # 10am UTC daily — after nightly (6am), sync changes (7am), daily verify (8am), enrichment (9am)
 
 concurrency:
   group: ${{ github.workflow }}
