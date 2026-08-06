@@ -1,7 +1,20 @@
 """
-Nightly enrichment bot: runs 3 hours after the main nightly bot and populates
-all secondary fields for titles added in the last N hours (default 6, override
-with --hours).
+Enrichment bot: state-driven scan that populates all secondary fields for
+any title that hasn't been enriched yet, regardless of when it was created.
+
+Selection is WHERE enriched_at IS NULL, newest created_at first, capped at
+--limit (or the ENRICH_LIMIT env var, default 500) titles per run. This
+replaces the old created_at >= NOW() - Xh time-window query — a title
+missed by one run (nightly ran long, enrichment itself failed, etc.) is no
+longer orphaned forever; it just stays NULL and gets picked up by the next
+run. Bare rows from bulk_import.py self-enrich the same way, no manual
+full-backfill needed.
+
+A row's enriched_at is stamped only if every step below ran without
+raising — an empty result (e.g. no trailer exists on TMDB) still counts as
+a completed attempt. If any step raises, enriched_at is left NULL, the
+failure is logged and counted, and the row is retried on a future run
+(never retried within the same run — a poison row can't loop forever).
 
 Every step except States is skipped when its target is already populated,
 making the script idempotent — safe to re-run without wasting API calls.
@@ -19,13 +32,13 @@ Steps per title (in order):
 
 Run via:
     python -m bot.enrich_new_titles
-    python -m bot.enrich_new_titles --hours=20
+    python -m bot.enrich_new_titles --limit=1000
 """
 
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
@@ -33,6 +46,8 @@ from .migrate_images import migrate_poster, migrate_carousel, download_image
 
 POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 BUCKET      = "media-images"
+
+DEFAULT_ENRICH_LIMIT = 500
 
 
 def _full_image_url(path: str) -> str:
@@ -65,21 +80,21 @@ def load_env() -> dict[str, str]:
 
 
 def main() -> None:
-    print("[ENRICH] Starting nightly enrichment bot...")
+    print("[ENRICH] Starting enrichment bot...")
 
-    hours = 6
+    limit = None
     for arg in sys.argv[1:]:
-        if arg.startswith("--hours="):
-            hours = int(arg.split("=")[1])
+        if arg.startswith("--limit="):
+            limit = int(arg.split("=")[1])
+    if limit is None:
+        limit = int(os.environ.get("ENRICH_LIMIT", DEFAULT_ENRICH_LIMIT))
 
     config = load_env()
 
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
 
-    cutoff     = datetime.utcnow() - timedelta(hours=hours)
-    cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
-    print(f"[ENRICH] Querying titles created since {cutoff_str} UTC...")
+    print(f"[ENRICH] Scanning up to {limit} title(s) where enriched_at IS NULL (newest created_at first)...")
 
     new_titles = (
         db.client.table("media")
@@ -88,16 +103,14 @@ def main() -> None:
             "is_in_theatres, is_streamable_now, title_logo_url, certification, "
             "genres, runtime"
         )
-        .gte("created_at", cutoff_str)
+        .is_("enriched_at", "null")
+        .order("created_at", desc=True)
+        .limit(limit)
         .execute()
         .data or []
     )
-    total = len(new_titles)
-    print(f"[ENRICH] {total} new title(s) to enrich.")
-
-    if not total:
-        print("[ENRICH] Nothing to do.")
-        return
+    scanned = len(new_titles)
+    print(f"[ENRICH] {scanned} title(s) to process this run.")
 
     stats = {
         "images":   0,
@@ -111,6 +124,7 @@ def main() -> None:
         "states":   0,
         "errors":   0,
     }
+    enriched_count = 0
 
     for i, row in enumerate(new_titles, start=1):
         media_id    = row["id"]
@@ -119,7 +133,12 @@ def main() -> None:
         media_type  = row["media_type"]
         poster_path = row.get("poster_path") or ""
 
-        print(f"\n[ENRICH] {i}/{total}: {title} ({media_type})")
+        print(f"\n[ENRICH] {i}/{scanned}: {title} ({media_type})")
+
+        # Tracks whether ANY step below raised for this row. Only a clean
+        # sweep (no exceptions — an empty/not-found result is NOT an
+        # exception) gets enriched_at stamped at the end.
+        row_had_error = False
 
         # ── Step 1: Images ──────────────────────────────────────────────
         if not row.get("poster_url"):
@@ -138,6 +157,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   images: failed — {exc}")
                 stats["errors"] += 1
+                row_had_error = True
             time.sleep(0.25)
 
         # ── Step 2+3: Trailers & Credits (one combined detail call) ──────
@@ -194,6 +214,7 @@ def main() -> None:
         except Exception as exc:
             print(f"[ENRICH]   trailers/credits: failed — {exc}")
             stats["errors"] += 1
+            row_had_error = True
 
         # ── Step 4: Seasons (TV only) ────────────────────────────────────
         if media_type == "tv":
@@ -237,6 +258,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   seasons: failed — {exc}")
                 stats["errors"] += 1
+                row_had_error = True
             time.sleep(0.25)
 
         # ── Step 5: Title logos ─────────────────────────────────────────
@@ -250,6 +272,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   logo: failed — {exc}")
                 stats["errors"] += 1
+                row_had_error = True
 
         # ── Step 6: Certifications ──────────────────────────────────────
         if not row.get("certification"):
@@ -262,6 +285,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   cert: failed — {exc}")
                 stats["errors"] += 1
+                row_had_error = True
 
         # ── Step 7: Runtime (movies only) ───────────────────────────────
         if media_type == "movie" and not row.get("runtime"):
@@ -275,6 +299,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   runtime: failed — {exc}")
                 stats["errors"] += 1
+                row_had_error = True
 
         # ── Step 8: Genres ──────────────────────────────────────────────
         if not row.get("genres"):
@@ -288,6 +313,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   genres: failed — {exc}")
                 stats["errors"] += 1
+                row_had_error = True
 
         # ── Step 9: States ───────────────────────────────────────────────
         try:
@@ -300,8 +326,9 @@ def main() -> None:
             )
             has_providers = bool(sa.data)
 
-            # is_in_theatres is never set here — main.py Step 13 (TMDB
-            # /movie/now_playing) is the only source of truth for it.
+            # is_in_theatres is never set here — daily_verify.py (TMDB
+            # /movie/now_playing, runs daily at 8am UTC) is the only
+            # source of truth for it.
             if has_providers:
                 new_theatres, new_streamable = False, True
             else:
@@ -323,27 +350,46 @@ def main() -> None:
         except Exception as exc:
             print(f"[ENRICH]   states: failed — {exc}")
             stats["errors"] += 1
+            row_had_error = True
+
+        # ── Mark this row's enrichment attempt complete ───────────────────
+        if row_had_error:
+            print("[ENRICH]   not marking enriched — at least one step failed, will retry next run.")
+        else:
+            try:
+                db.client.table("media").update(
+                    {"enriched_at": datetime.now(timezone.utc).isoformat()}
+                ).eq("id", media_id).execute()
+                enriched_count += 1
+            except Exception as exc:
+                print(f"[ENRICH]   failed to stamp enriched_at: {exc}")
+                stats["errors"] += 1
+
+    # ── Per-field breakdown ─────────────────────────────────────────────
+    if scanned:
+        print(f"\n[ENRICH] ===== FIELD BREAKDOWN =====")
+        print(f"[ENRICH] Images           : {stats['images']}")
+        print(f"[ENRICH] Trailers         : {stats['trailers']}")
+        print(f"[ENRICH] Credits (titles) : {stats['credits']}")
+        print(f"[ENRICH] Seasons inserted : {stats['seasons']}")
+        print(f"[ENRICH] Title logos      : {stats['logos']}")
+        print(f"[ENRICH] Certifications   : {stats['certs']}")
+        print(f"[ENRICH] Runtimes         : {stats['runtimes']}")
+        print(f"[ENRICH] Genres           : {stats['genres']}")
+        print(f"[ENRICH] States updated   : {stats['states']}")
 
     # ── Summary ──────────────────────────────────────────────────────────
-    print(f"\n[ENRICH] ===== SUMMARY =====")
-    print(f"[ENRICH] Titles processed : {total}")
-    print(f"[ENRICH] Images           : {stats['images']}")
-    print(f"[ENRICH] Trailers         : {stats['trailers']}")
-    print(f"[ENRICH] Credits (titles) : {stats['credits']}")
-    print(f"[ENRICH] Seasons inserted : {stats['seasons']}")
-    print(f"[ENRICH] Title logos      : {stats['logos']}")
-    print(f"[ENRICH] Certifications   : {stats['certs']}")
-    print(f"[ENRICH] Runtimes         : {stats['runtimes']}")
-    print(f"[ENRICH] Genres           : {stats['genres']}")
-    print(f"[ENRICH] States updated   : {stats['states']}")
-
-    enriched_total = (
-        stats["images"] + stats["trailers"] + stats["credits"] + stats["seasons"]
-        + stats["logos"] + stats["certs"] + stats["runtimes"] + stats["genres"] + stats["states"]
+    remaining_null = (
+        db.client.table("media")
+        .select("id", count="exact")
+        .is_("enriched_at", "null")
+        .limit(1)
+        .execute()
+        .count or 0
     )
     print(
-        f"[ENRICH] SUMMARY discovered={total} new_inserted=0 "
-        f"reverified=0 enriched={enriched_total} errors={stats['errors']}"
+        f"\n[ENRICH] SUMMARY scanned={scanned} enriched={enriched_count} "
+        f"errors={stats['errors']} remaining_null={remaining_null}"
     )
 
 
