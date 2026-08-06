@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 8 * * 1'  # Mondays 08:00 UTC (~05:00 Chile)
   workflow_dispatch:
+    inputs:
+      related_batch:
+        description: 'Max titles to drain via trakt_related_synced_at IS NULL this run'
+        required: false
+        default: '4000'
 
 concurrency:
   group: ${{ github.workflow }}
@@ -25,4 +30,5 @@ jobs:
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TRAKT_RELATED_BATCH: ${{ github.event.inputs.related_batch || '4000' }}
         run: python -m bot.sync_trakt
