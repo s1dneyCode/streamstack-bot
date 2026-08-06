@@ -103,71 +103,81 @@ def main() -> None:
     total_episodes = 0
     total_posters  = 0
     total_runtimes = 0
+    errors         = 0
 
     for i, show in enumerate(needs_seasons, start=1):
         tmdb_id  = show["tmdb_id"]
         media_id = show["id"]
         title    = show["title"]
 
-        seasons_raw = tmdb.get_seasons(tmdb_id=tmdb_id)
-        if not seasons_raw:
-            print(f"[SEASONS] {i}/{total} {title}: no seasons found")
-            time.sleep(0.5)
-            continue
-
-        # Upload season posters to Supabase Storage
-        posters_uploaded = 0
-        for s in seasons_raw:
-            poster_path = s.get("poster_path", "")
-            if poster_path:
-                img = download_image(f"{POSTER_BASE}{poster_path}")
-                if img:
-                    url = db.upload_image(
-                        BUCKET,
-                        f"seasons/{tmdb_id}/{s['season_number']}.jpg",
-                        img,
-                    )
-                    if url:
-                        s["poster_url"] = url
-                        posters_uploaded += 1
-
-        # Upsert seasons
-        season_rows_inserted = db.upsert_seasons(media_id=media_id, seasons=seasons_raw)
-        season_map = {r["season_number"]: r["id"] for r in season_rows_inserted}
-        total_seasons  += len(season_rows_inserted)
-        total_posters  += posters_uploaded
-
-        # Upsert episodes for each season
-        episodes_for_show = 0
-        for s in seasons_raw:
-            season_id = season_map.get(s["season_number"])
-            if not season_id:
+        try:
+            seasons_raw = tmdb.get_seasons(tmdb_id=tmdb_id)
+            if not seasons_raw:
+                print(f"[SEASONS] {i}/{total} {title}: no seasons found")
+                time.sleep(0.5)
                 continue
-            _, episodes = tmdb.get_season_episodes(
-                tmdb_id=tmdb_id, season_number=s["season_number"]
+
+            # Upload season posters to Supabase Storage
+            posters_uploaded = 0
+            for s in seasons_raw:
+                poster_path = s.get("poster_path", "")
+                if poster_path:
+                    img = download_image(f"{POSTER_BASE}{poster_path}")
+                    if img:
+                        url = db.upload_image(
+                            BUCKET,
+                            f"seasons/{tmdb_id}/{s['season_number']}.jpg",
+                            img,
+                        )
+                        if url:
+                            s["poster_url"] = url
+                            posters_uploaded += 1
+
+            # Upsert seasons
+            season_rows_inserted = db.upsert_seasons(media_id=media_id, seasons=seasons_raw)
+            season_map = {r["season_number"]: r["id"] for r in season_rows_inserted}
+            total_seasons  += len(season_rows_inserted)
+            total_posters  += posters_uploaded
+
+            # Upsert episodes for each season — isolated per season so one
+            # bad season doesn't lose the rest of this show's episodes.
+            episodes_for_show = 0
+            for s in seasons_raw:
+                season_id = season_map.get(s["season_number"])
+                if not season_id:
+                    continue
+                try:
+                    _, episodes = tmdb.get_season_episodes(
+                        tmdb_id=tmdb_id, season_number=s["season_number"]
+                    )
+                    n = db.upsert_episodes(season_id=season_id, episodes=episodes)
+                    episodes_for_show += n
+                except Exception as exc:
+                    print(f"[SEASONS] {i}/{total} {title} season {s['season_number']}: failed — {exc}")
+                    errors += 1
+                time.sleep(0.25)
+
+            total_episodes += episodes_for_show
+
+            # Update TV runtime average
+            avg = db.update_tv_runtime(media_id=media_id)
+            if avg is not None:
+                total_runtimes += 1
+
+            print(
+                f"[SEASONS] {i}/{total} {title}: "
+                f"{len(season_rows_inserted)} seasons, {episodes_for_show} episodes, "
+                f"{posters_uploaded} posters, runtime={avg or 'n/a'}"
             )
-            n = db.upsert_episodes(season_id=season_id, episodes=episodes)
-            episodes_for_show  += n
-            time.sleep(0.25)
-
-        total_episodes += episodes_for_show
-
-        # Update TV runtime average
-        avg = db.update_tv_runtime(media_id=media_id)
-        if avg is not None:
-            total_runtimes += 1
-
-        print(
-            f"[SEASONS] {i}/{total} {title}: "
-            f"{len(season_rows_inserted)} seasons, {episodes_for_show} episodes, "
-            f"{posters_uploaded} posters, runtime={avg or 'n/a'}"
-        )
+        except Exception as exc:
+            print(f"[SEASONS] {i}/{total} {title}: failed — {exc}")
+            errors += 1
         time.sleep(0.5)
 
     print(
         f"[SEASONS] Done. {total} shows processed — "
         f"{total_seasons} seasons, {total_episodes} episodes inserted, "
-        f"{total_posters} posters uploaded, {total_runtimes} runtimes updated."
+        f"{total_posters} posters uploaded, {total_runtimes} runtimes updated, {errors} errors."
     )
 
 

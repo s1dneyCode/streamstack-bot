@@ -135,29 +135,34 @@ def main() -> None:
 
         updated     = 0
         cast_orders = 0
+        errors      = 0
 
         for i, row in enumerate(targets, start=1):
-            result = tmdb.get_credits(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
-            cast   = result["cast"]
+            try:
+                result = tmdb.get_credits(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
+                cast   = result["cast"]
 
-            count = db.upsert_credits(
-                media_id=row["id"],
-                directors=[],
-                writers=[],
-                cast=cast,
-                created_by=[],
-                producers=[],
-            )
-            if count:
-                updated += 1
-            cast_orders += sum(1 for p in cast if p.get("order") is not None)
+                count = db.upsert_credits(
+                    media_id=row["id"],
+                    directors=[],
+                    writers=[],
+                    cast=cast,
+                    created_by=[],
+                    producers=[],
+                )
+                if count:
+                    updated += 1
+                cast_orders += sum(1 for p in cast if p.get("order") is not None)
 
-            print(f"[CREDITS] {i}/{total} {row['title']} ({row['media_type']}): {len(cast)} cast order(s) refreshed")
+                print(f"[CREDITS] {i}/{total} {row['title']} ({row['media_type']}): {len(cast)} cast order(s) refreshed")
+            except Exception as exc:
+                print(f"[CREDITS] {i}/{total} {row['title']}: failed — {exc}")
+                errors += 1
             time.sleep(0.25)
 
         print(
             f"[CREDITS] Done. {total} titles processed — "
-            f"{updated} titles updated, {cast_orders} cast order values set."
+            f"{updated} titles updated, {cast_orders} cast order values set, {errors} errors."
         )
         return
 
@@ -194,64 +199,69 @@ def main() -> None:
     total_created_by = 0
     total_producers  = 0
     no_credits       = 0
+    errors           = 0
 
     for i, row in enumerate(targets, start=1):
-        result = tmdb.get_credits(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
+        try:
+            result = tmdb.get_credits(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
 
-        directors  = result["directors"]
-        writers    = result["writers"]
-        cast       = result["cast"]
-        created_by = result["created_by"]
-        producers  = result["producers"]
+            directors  = result["directors"]
+            writers    = result["writers"]
+            cast       = result["cast"]
+            created_by = result["created_by"]
+            producers  = result["producers"]
 
-        if producer_only:
-            # Only upsert producer rows; leave other roles untouched
-            count = db.upsert_credits(
-                media_id=row["id"],
-                directors=[],
-                writers=[],
-                cast=[],
-                created_by=[],
-                producers=producers,
+            if producer_only:
+                # Only upsert producer rows; leave other roles untouched
+                count = db.upsert_credits(
+                    media_id=row["id"],
+                    directors=[],
+                    writers=[],
+                    cast=[],
+                    created_by=[],
+                    producers=producers,
+                )
+            else:
+                count = db.upsert_credits(
+                    media_id=row["id"],
+                    directors=directors,
+                    writers=writers,
+                    cast=cast,
+                    created_by=created_by,
+                    producers=producers,
+                )
+
+            total_directors  += len(directors)  if not producer_only else 0
+            total_writers    += len(writers)    if not producer_only else 0
+            total_cast       += len(cast)       if not producer_only else 0
+            total_created_by += len(created_by) if not producer_only else 0
+            total_producers  += len(producers)
+
+            if count == 0:
+                no_credits += 1
+
+            print(
+                f"[CREDITS] {i}/{total} {row['title']} ({row['media_type']}): "
+                + (f"{len(producers)}p" if producer_only else
+                   f"{len(directors)}d / {len(writers)}w / {len(cast)}c / {len(created_by)}cb / {len(producers)}p")
             )
-        else:
-            count = db.upsert_credits(
-                media_id=row["id"],
-                directors=directors,
-                writers=writers,
-                cast=cast,
-                created_by=created_by,
-                producers=producers,
-            )
-
-        total_directors  += len(directors)  if not producer_only else 0
-        total_writers    += len(writers)    if not producer_only else 0
-        total_cast       += len(cast)       if not producer_only else 0
-        total_created_by += len(created_by) if not producer_only else 0
-        total_producers  += len(producers)
-
-        if count == 0:
-            no_credits += 1
-
-        print(
-            f"[CREDITS] {i}/{total} {row['title']} ({row['media_type']}): "
-            + (f"{len(producers)}p" if producer_only else
-               f"{len(directors)}d / {len(writers)}w / {len(cast)}c / {len(created_by)}cb / {len(producers)}p")
-        )
+        except Exception as exc:
+            print(f"[CREDITS] {i}/{total} {row['title']}: failed — {exc}")
+            errors += 1
         time.sleep(0.25)
 
     if producer_only:
         print(
             f"[CREDITS] Done. {total} titles processed — "
             f"{total_producers} producers inserted. "
-            f"{no_credits} titles with no producers found."
+            f"{no_credits} titles with no producers found, {errors} errors."
         )
     else:
         print(
             f"[CREDITS] Done. {total} titles processed — "
             f"{total_directors} directors, {total_writers} writers, "
             f"{total_cast} cast, {total_created_by} created_by, {total_producers} producers inserted. "
-            f"{no_credits} titles with no credits found."
+            f"{no_credits} titles with no credits found, {errors} errors."
         )
 
 

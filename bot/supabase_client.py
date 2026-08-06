@@ -103,6 +103,48 @@ def compute_popularity_score(
     return round(bayesian * (0.7 + 0.3 * freshness), 2)
 
 
+def _dedupe_by_conflict_key(rows: list[dict], key_fields: tuple[str, ...]) -> list[dict]:
+    """
+    Keep only the first row per unique combination of *key_fields* values.
+
+    Postgres rejects an upsert batch outright if it contains two rows with
+    the same on_conflict key ("ON CONFLICT DO UPDATE cannot affect row a
+    second time") — the whole batch is lost, not just the duplicate — so
+    this must run before every upsert() call below that's keyed on
+    caller-supplied data (TMDB's own lists aren't guaranteed unique).
+    """
+    seen: set[tuple] = set()
+    deduped: list[dict] = []
+    for row in rows:
+        key = tuple(row[f] for f in key_fields)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(row)
+    return deduped
+
+
+def _dedupe_credit_rows(rows: list[dict]) -> list[dict]:
+    """
+    Same purpose as _dedupe_by_conflict_key, keyed on (media_id, name,
+    role) — but when TMDB lists the same person twice for a title (dual
+    cast roles, duplicate crew entries), keep whichever duplicate carries
+    richer data instead of an arbitrary one: a defined `order` (lower
+    wins) beats a missing one, then a non-empty `character` beats an
+    empty one. Ties keep the first occurrence.
+    """
+    def _richness(row: dict) -> tuple:
+        order = row.get("order")
+        has_order = order is not None
+        return (not has_order, order if has_order else 0, not bool(row.get("character")))
+
+    best: dict[tuple, dict] = {}
+    for row in rows:
+        key = (row["media_id"], row["name"], row["role"])
+        if key not in best or _richness(row) < _richness(best[key]):
+            best[key] = row
+    return list(best.values())
+
+
 class SupabaseClient:
     """Wraps the Supabase Python SDK for the bot's read/write operations."""
 
@@ -286,8 +328,12 @@ class SupabaseClient:
     def upsert_seasons(self, media_id: str, seasons: list[dict]) -> list[dict]:
         """
         Upsert season rows into media_seasons.
-        Conflict key: (media_id, season_number).
+        Conflict key: (media_id, season_number). Deduped by that key before
+        upserting (see _dedupe_by_conflict_key) — low risk in practice
+        since TMDB's own seasons array is one entry per season number, but
+        cheap insurance against a data anomaly poisoning the whole batch.
         Returns the upserted rows (with id) for use by upsert_episodes.
+        Raises on failure — never returns [] to mean "failed silently."
         """
         if not seasons:
             return []
@@ -303,6 +349,7 @@ class SupabaseClient:
             }
             for s in seasons
         ]
+        rows = _dedupe_by_conflict_key(rows, ("media_id", "season_number"))
         try:
             self.client.table("media_seasons").upsert(
                 rows, on_conflict="media_id,season_number"
@@ -317,12 +364,18 @@ class SupabaseClient:
             return result.data or []
         except Exception as exc:
             print(f"[Supabase] Error upserting seasons for media_id={media_id}: {exc}")
-            return []
+            raise
 
     def upsert_episodes(self, season_id: str, episodes: list[dict]) -> int:
         """
         Upsert episode rows into media_episodes.
-        Conflict key: (season_id, episode_number). Returns rows upserted.
+        Conflict key: (season_id, episode_number). Deduped by that key
+        before upserting (see _dedupe_by_conflict_key) — low risk in
+        practice since TMDB's own episodes array is one entry per episode
+        number, but cheap insurance against a data anomaly poisoning the
+        whole batch.
+        Returns rows upserted. Raises on failure — never returns 0 to mean
+        "failed silently."
         """
         if not episodes:
             return 0
@@ -339,6 +392,7 @@ class SupabaseClient:
         ]
         if not rows:
             return 0
+        rows = _dedupe_by_conflict_key(rows, ("season_id", "episode_number"))
         try:
             self.client.table("media_episodes").upsert(
                 rows, on_conflict="season_id,episode_number"
@@ -347,7 +401,7 @@ class SupabaseClient:
             return len(rows)
         except Exception as exc:
             print(f"[Supabase] Error upserting episodes for season_id={season_id}: {exc}")
-            return 0
+            raise
 
     def update_tv_runtime(self, media_id: str) -> int | None:
         """
@@ -384,7 +438,16 @@ class SupabaseClient:
         """
         Upsert credit rows into media_credits.
         Roles: "director", "writer", "cast", "created_by", "producer".
-        Conflict key: (media_id, name, role). Returns total rows upserted.
+        Conflict key: (media_id, name, role). TMDB sometimes lists the same
+        person twice (dual cast roles, duplicate crew entries) — writers
+        and producers are already deduped upstream in TmdbClient.get_credits,
+        but directors/cast/created_by aren't, so this is deduped by conflict
+        key here too (see _dedupe_credit_rows), keeping the richer duplicate.
+        This is the confirmed root cause of ~40 titles losing ALL credits at
+        once: Postgres rejects the whole upsert batch if it contains two
+        rows with the same conflict key, not just the duplicate row.
+        Returns total rows upserted. Raises on failure — never returns 0 to
+        mean "failed silently."
         """
         rows: list[dict] = []
 
@@ -406,6 +469,8 @@ class SupabaseClient:
         if not rows:
             return 0
 
+        rows = _dedupe_credit_rows(rows)
+
         try:
             self.client.table("media_credits").upsert(
                 rows,
@@ -415,12 +480,17 @@ class SupabaseClient:
             return len(rows)
         except Exception as exc:
             print(f"[Supabase] Error upserting credits for media_id={media_id}: {exc}")
-            return 0
+            raise
 
     def upsert_trailers(self, media_id: int, trailers: list[dict]) -> int:
         """
         Upsert trailer rows into media_trailers for the given media row.
-        Conflict key: (media_id, youtube_key). Returns the number of rows upserted.
+        Conflict key: (media_id, youtube_key). Deduped by that key before
+        upserting (see _dedupe_by_conflict_key) — TMDB's /videos endpoint
+        can plausibly list the same underlying video twice (duplicate
+        entries with the same key), so this isn't just defensive.
+        Returns the number of rows upserted. Raises on failure — never
+        returns 0 to mean "failed silently."
         """
         if not trailers:
             return 0
@@ -440,6 +510,8 @@ class SupabaseClient:
         if not rows:
             return 0
 
+        rows = _dedupe_by_conflict_key(rows, ("media_id", "youtube_key"))
+
         try:
             self.client.table("media_trailers").upsert(
                 rows,
@@ -449,7 +521,7 @@ class SupabaseClient:
             return len(rows)
         except Exception as exc:
             print(f"[Supabase] Error upserting trailers for media_id={media_id}: {exc}")
-            return 0
+            raise
 
     def upload_image(self, bucket: str, path: str, image_bytes: bytes, content_type: str = "image/jpeg") -> str | None:
         """Upload image_bytes to Supabase Storage and return the public URL, or None on failure."""

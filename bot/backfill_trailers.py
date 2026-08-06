@@ -55,22 +55,27 @@ def main() -> None:
 
     total_inserted = 0
     no_trailers    = 0
+    errors         = 0
 
     for i, row in enumerate(needs_trailers, start=1):
-        videos = tmdb.get_videos(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
-        count  = db.upsert_trailers(media_id=row["id"], trailers=videos)
+        try:
+            videos = tmdb.get_videos(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
+            count  = db.upsert_trailers(media_id=row["id"], trailers=videos)
 
-        total_inserted += count
-        if count == 0:
-            no_trailers += 1
+            total_inserted += count
+            if count == 0:
+                no_trailers += 1
 
-        print(f"[TRAILERS] {i}/{total} {row['title']}: {count} trailer(s)")
+            print(f"[TRAILERS] {i}/{total} {row['title']}: {count} trailer(s)")
+        except Exception as exc:
+            print(f"[TRAILERS] {i}/{total} {row['title']}: failed — {exc}")
+            errors += 1
         time.sleep(0.25)
 
     print(
         f"[TRAILERS] Done. {total} titles processed, "
         f"{total_inserted} trailers inserted, "
-        f"{no_trailers} titles with no trailers found."
+        f"{no_trailers} titles with no trailers found, {errors} errors."
     )
 
 
