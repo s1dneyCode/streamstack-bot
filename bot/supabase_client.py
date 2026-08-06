@@ -619,18 +619,6 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error setting tmdb_missing_at for media_id={media_id}: {exc}")
 
-    def reset_streaming_last_checked(self, media_id: int) -> None:
-        """
-        Clear streaming_last_checked back to NULL on the media row so it
-        sorts to the front of get_titles_to_reverify()'s nullsfirst=True
-        ordering — i.e. re-verified sooner rather than waiting out its
-        normal staleness window.
-        """
-        try:
-            self.client.table("media").update({"streaming_last_checked": None}).eq("id", media_id).execute()
-        except Exception as exc:
-            print(f"[Supabase] Error resetting streaming_last_checked for media_id={media_id}: {exc}")
-
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------

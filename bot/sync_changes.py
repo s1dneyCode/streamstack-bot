@@ -1,22 +1,27 @@
 """
-Daily /changes sync: catches new titles and TMDB-side deletions between
-nightly bot runs by walking TMDB's /movie/changes and /tv/changes feeds —
-the same feed TMDB itself recommends for staying in sync without re-crawling
-the whole catalog.
+Daily /changes sync: catches new titles between nightly bot runs by walking
+TMDB's /movie/changes and /tv/changes feeds — the same feed TMDB itself
+recommends for staying in sync without re-crawling the whole catalog.
 
 Window: since the last successful run (last_synced_at, persisted in
 bot_state), defaulting to 24h if no prior run is recorded. If a run was
 missed and more than TMDB's 14-day max has elapsed, the window is capped at
 14 days — TMDB simply won't report changes further back than that.
 
-For each changed id:
-  - 404 from TMDB → the title is gone. If we have it, soft-flag it via
-    tmdb_missing_at (never delete). If we don't, nothing to do.
-  - Not in our DB and passes the quality filter → bare-row insert
-    (enriched_at NULL; enrich_new_titles.py fills in the rest).
-  - Already in our DB → reset streaming_last_checked to NULL so
-    get_titles_to_reverify() re-checks its availability sooner. No forced
-    re-enrichment.
+Changed ids are batch-checked against the DB first. A noisy /changes day is
+overwhelmingly ids we already have — those are skipped entirely, no detail
+fetch. Only ids NOT already in our DB get a detail fetch:
+  - 404 → never existed in our DB and already gone from TMDB. Nothing to do.
+  - Passes the shared quality filter → bare-row insert (enriched_at NULL;
+    enrich_new_titles.py fills in the rest).
+  - Otherwise → skipped (doesn't clear the bar for a bare insert).
+
+TMDB-side deletions of titles we already have are NOT this script's job —
+that's covered elsewhere for free: main.py Step 10 catches a 404 during its
+existing weekly provider re-verify, and enrich_new_titles.py's Step 0 base
+detail check catches it for anything not yet enriched. Between the two,
+every row in the DB eventually gets its liveness checked without sync_changes
+needing to spend a detail-fetch on ids it already has.
 
 Run via:
     python -m bot.sync_changes
@@ -102,30 +107,24 @@ def main() -> None:
         tv_ids = []
 
     changed = [(tmdb_id, "movie") for tmdb_id in movie_ids] + [(tmdb_id, "tv") for tmdb_id in tv_ids]
-    print(f"[CHANGES] {len(movie_ids)} changed movie id(s), {len(tv_ids)} changed tv id(s) — {len(changed)} total.")
+    checked = len(changed)
+    print(f"[CHANGES] {len(movie_ids)} changed movie id(s), {len(tv_ids)} changed tv id(s) — {checked} total.")
 
     existing_map = db.get_media_ids_by_tmdb_ids([tmdb_id for tmdb_id, _ in changed]) if changed else {}
-    print(f"[CHANGES] {len(existing_map)}/{len(changed)} already in DB.")
+    new_candidates = [(tmdb_id, media_type) for tmdb_id, media_type in changed if tmdb_id not in existing_map]
+    skipped_existing = checked - len(new_candidates)
+    print(f"[CHANGES] {skipped_existing} already in DB — skipped without a detail fetch. {len(new_candidates)} candidate(s) to check.")
 
-    checked        = 0
-    new_inserted   = 0
-    marked_missing = 0
-    errors         = 0
+    new_inserted = 0
+    errors       = 0
 
-    for tmdb_id, media_type in changed:
-        checked += 1
-        media_id = existing_map.get(tmdb_id)
-
+    for tmdb_id, media_type in new_candidates:
         try:
             detail = tmdb._get(f"/{media_type}/{tmdb_id}")
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
             if status == 404:
-                if media_id:
-                    db.set_tmdb_missing(media_id)
-                    marked_missing += 1
-                    print(f"[CHANGES]   {media_type}/{tmdb_id}: 404 — flagged tmdb_missing_at.")
-                # Not in our DB and gone from TMDB — nothing to do.
+                # Never existed in our DB and already gone from TMDB — nothing to do.
                 continue
             print(f"[CHANGES]   {media_type}/{tmdb_id}: fetch failed ({status}) — {exc}")
             errors += 1
@@ -136,10 +135,6 @@ def main() -> None:
             continue
 
         try:
-            if media_id:
-                db.reset_streaming_last_checked(media_id)
-                continue
-
             if not passes_sync_quality_filter(detail):
                 continue
 
@@ -178,8 +173,8 @@ def main() -> None:
         print(f"[CHANGES] WARNING: failed to persist last_synced_at — next run will re-widen the window: {exc}")
 
     print(
-        f"\n[CHANGES] SUMMARY checked={checked} new_inserted={new_inserted} "
-        f"marked_missing={marked_missing} errors={errors}"
+        f"\n[CHANGES] SUMMARY checked={checked} skipped_existing={skipped_existing} "
+        f"new_inserted={new_inserted} errors={errors}"
     )
 
 

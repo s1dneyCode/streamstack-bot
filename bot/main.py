@@ -20,6 +20,8 @@ import os
 import sys
 from datetime import date
 
+import requests
+
 from .tmdb import TmdbClient
 from .omdb import OmdbClient
 from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES, ALLOWED_PROVIDERS
@@ -327,16 +329,39 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print(f"\n[BOT] Step 10: Re-verifying streaming providers for {len(reverify_list)} existing titles...")
 
-    reverified   = 0
-    step10_errors = 0
+    reverified      = 0
+    step10_missing  = 0
+    step10_errors   = 0
+    missing_tmdb_ids: set[int] = set()
     for item in reverify_list:
         media_id   = item["id"]
         tmdb_id    = item["tmdb_id"]
         title      = item["title"]
         media_type = item["media_type"]
 
+        # Fetched directly (not via the get_watch_providers(data=None) path)
+        # so a 404 — the title has been removed from TMDB — surfaces here
+        # instead of being swallowed into an empty-providers result.
         try:
-            providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+            raw_providers = tmdb._get(f"/{media_type}/{tmdb_id}/watch/providers")
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status == 404:
+                db.set_tmdb_missing(media_id)
+                missing_tmdb_ids.add(tmdb_id)
+                step10_missing += 1
+                print(f"[BOT] Step 10 {title}: 404 — removed from TMDB, flagged tmdb_missing_at.")
+                continue
+            print(f"[BOT] Step 10 {title}: failed ({status}) — {exc}")
+            step10_errors += 1
+            continue
+        except Exception as exc:
+            print(f"[BOT] Step 10 {title}: failed — {exc}")
+            step10_errors += 1
+            continue
+
+        try:
+            providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type, data=raw_providers)
             providers = {
                 kind: [p for p in names if p in ALLOWED_PROVIDERS]
                 for kind, names in providers.items()
@@ -355,7 +380,11 @@ def main() -> None:
             print(f"[BOT] Step 10 {title}: failed — {exc}")
             step10_errors += 1
 
-    print(f"[BOT] Step 10 done. {reverified} titles re-verified, {step10_errors} errors.")
+    print(f"[BOT] Step 10 done. {reverified} titles re-verified, {step10_missing} flagged missing, {step10_errors} errors.")
+
+    if missing_tmdb_ids:
+        reverify_list = [item for item in reverify_list if item["tmdb_id"] not in missing_tmdb_ids]
+        print(f"[BOT] Excluded {len(missing_tmdb_ids)} newly-flagged-missing title(s) from Steps 10b/11.")
 
     # ------------------------------------------------------------------ #
     # Step 10b — Update popularity for titles due for re-verification      #
