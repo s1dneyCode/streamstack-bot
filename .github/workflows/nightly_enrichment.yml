@@ -1,9 +1,14 @@
 name: Nightly Enrichment
 
 on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max titles to enrich this run'
+        required: false
+        default: '2000'
   schedule:
     - cron: '0 9 * * *'  # 9AM UTC = 6AM Chile, 3h after main nightly bot
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}
@@ -12,7 +17,7 @@ concurrency:
 jobs:
   enrich:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     env:
       PYTHONUNBUFFERED: '1'
     steps:
@@ -27,4 +32,4 @@ jobs:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.enrich_new_titles
+        run: python -m bot.enrich_new_titles --limit=${{ github.event.inputs.limit || '2000' }}
