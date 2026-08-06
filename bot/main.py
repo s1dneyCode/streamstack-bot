@@ -279,10 +279,10 @@ def main() -> None:
         # --- Watch providers (from the appended detail payload above) ----
         watch_providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type, data=watch_providers_data)
         watch_providers = {
-            kind: [p for p in names if p in ALLOWED_PROVIDERS]
-            for kind, names in watch_providers.items()
+            region: {kind: [p for p in names if p in ALLOWED_PROVIDERS] for kind, names in kinds.items()}
+            for region, kinds in watch_providers.items()
         }
-        is_streamable_now = bool(watch_providers.get("flatrate"))
+        is_streamable_now = bool(watch_providers.get("US", {}).get("flatrate"))
 
         # --- Build and persist the media record -------------------------
         media_record = {
@@ -312,7 +312,7 @@ def main() -> None:
         media_id = db.upsert_media(media_record)
         if media_id:
             step9_inserted += 1
-            if any(watch_providers.values()):
+            if any(names for kinds in watch_providers.values() for names in kinds.values()):
                 db.upsert_streaming_availability(media_id=media_id, providers=watch_providers)
             db.update_streaming_last_checked(media_id)
         else:
@@ -363,12 +363,12 @@ def main() -> None:
         try:
             providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type, data=raw_providers)
             providers = {
-                kind: [p for p in names if p in ALLOWED_PROVIDERS]
-                for kind, names in providers.items()
+                region: {kind: [p for p in names if p in ALLOWED_PROVIDERS] for kind, names in kinds.items()}
+                for region, kinds in providers.items()
             }
 
-            if any(providers.values()):
-                is_streamable = bool(providers.get("flatrate"))
+            if any(names for kinds in providers.values() for names in kinds.values()):
+                is_streamable = bool(providers.get("US", {}).get("flatrate"))
                 db.sync_streaming_providers(media_id=media_id, providers=providers)
                 db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
 

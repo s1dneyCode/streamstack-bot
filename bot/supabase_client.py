@@ -266,7 +266,7 @@ class SupabaseClient:
             print(f"[Supabase] Error upserting media '{media_dict.get('title')}': {exc}")
             return None
 
-    def upsert_streaming_availability(self, media_id: int, providers: dict[str, list[str]]) -> None:
+    def upsert_streaming_availability(self, media_id: int, providers: dict[str, dict[str, list[str]]]) -> None:
         """
         Insert streaming availability rows for a given media record that
         don't already exist.
@@ -291,11 +291,13 @@ class SupabaseClient:
         ----------
         media_id   Internal `id` from the media table (FK).
         providers  Dict as returned by TmdbClient.get_watch_providers(), e.g.
-                   {'flatrate': ['Netflix'], 'rent': ['Apple TV'], 'buy': [...]}.
+                   {'US': {'flatrate': ['Netflix'], 'rent': ['Apple TV'], 'buy': [...]},
+                    'MX': {'flatrate': [...], 'rent': [...], 'buy': [...]}, ...}.
         """
         rows = [
-            {"media_id": media_id, "provider_name": name, "region": "US", "monetization_type": kind}
-            for kind, names in (providers or {}).items()
+            {"media_id": media_id, "provider_name": name, "region": region, "monetization_type": kind}
+            for region, kinds in (providers or {}).items()
+            for kind, names in kinds.items()
             for name in names
         ]
 
@@ -314,7 +316,7 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error upserting streaming availability for media_id={media_id}: {exc}")
 
-    def sync_streaming_providers(self, media_id: int, providers: dict[str, list[str]]) -> None:
+    def sync_streaming_providers(self, media_id: int, providers: dict[str, dict[str, list[str]]]) -> None:
         """
         Reconcile streaming_availability for media_id with freshly fetched
         *providers*, without the delete-then-reinsert pattern that used to
@@ -331,7 +333,8 @@ class SupabaseClient:
         ----------
         media_id   Internal `id` from the media table (FK).
         providers  Dict as returned by TmdbClient.get_watch_providers(), e.g.
-                   {'flatrate': ['Netflix'], 'rent': ['Apple TV'], 'buy': [...]}.
+                   {'US': {'flatrate': ['Netflix'], 'rent': ['Apple TV'], 'buy': [...]},
+                    'MX': {'flatrate': [...], 'rent': [...], 'buy': [...]}, ...}.
         """
         try:
             current = (
@@ -346,8 +349,9 @@ class SupabaseClient:
             current = []
 
         new_combos = {
-            (name, "US", kind)
-            for kind, names in (providers or {}).items()
+            (name, region, kind)
+            for region, kinds in (providers or {}).items()
+            for kind, names in kinds.items()
             for name in names
         }
 

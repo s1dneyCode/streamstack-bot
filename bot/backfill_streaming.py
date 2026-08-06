@@ -85,12 +85,12 @@ def main() -> None:
 
         providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
         providers = {
-            kind: [p for p in names if p in ALLOWED_PROVIDERS]
-            for kind, names in providers.items()
+            region: {kind: [p for p in names if p in ALLOWED_PROVIDERS] for kind, names in kinds.items()}
+            for region, kinds in providers.items()
         }
 
-        if any(providers.values()):
-            is_streamable = bool(providers.get("flatrate"))
+        if any(names for kinds in providers.values() for names in kinds.values()):
+            is_streamable = bool(providers.get("US", {}).get("flatrate"))
             db.sync_streaming_providers(media_id=media_id, providers=providers)
             db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
             updated += 1

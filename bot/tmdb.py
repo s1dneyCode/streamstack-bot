@@ -23,6 +23,12 @@ POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 # this keeps us well clear of it without needing per-call time.sleep()s.
 TMDB_RATE_LIMIT = 20.0  # requests/second
 
+# Regions get_watch_providers() returns by default. The /watch/providers
+# response already contains every country in one call, so adding a region
+# here costs zero extra API requests — it's just which of the already-fetched
+# countries we bother to parse out.
+CURATED_REGIONS = ("US", "MX", "BR", "AR", "CL", "CO", "PE", "ES")
+
 _PRODUCER_JOBS = {"Producer", "Executive Producer"}
 
 
@@ -1456,15 +1462,17 @@ class TmdbClient:
         us_release_date = min(us_dates) if us_dates else None
         return release_date, us_release_date
 
-    def get_watch_providers(self, tmdb_id: int, media_type: str, data: dict | None = None) -> dict[str, list[str]]:
+    def get_watch_providers(self, tmdb_id: int, media_type: str, data: dict | None = None,
+                            regions: tuple[str, ...] = CURATED_REGIONS) -> dict[str, dict[str, list[str]]]:
         """
-        Return US watch providers for a title from
-        /movie|tv/{id}/watch/providers.
+        Return watch providers per region: {region: {'flatrate': [...], 'rent': [...], 'buy': [...]}}.
+        The /watch/providers response contains every country in one call, so N regions cost no extra requests.
 
-        Returns a dict with keys 'flatrate' (subscription), 'rent', and
-        'buy', each mapping to a list of provider_name strings. A missing
-        category in the API response returns an empty list for that key.
-        Returns all-empty lists when there is no US entry or on error.
+        Each region maps to a dict with keys 'flatrate' (subscription),
+        'rent', and 'buy', each a list of provider_name strings. A missing
+        category or region in the API response returns an empty list for
+        that key. Returns all-empty lists for every region when there is no
+        data at all or on error.
 
         Pass a pre-fetched /movie|tv/{id}/watch/providers payload via *data*
         to avoid a second request when the caller already has one (e.g. via
@@ -1475,13 +1483,15 @@ class TmdbClient:
                 data = self._get(f"/{media_type}/{tmdb_id}/watch/providers")
             except Exception as exc:
                 print(f"[TMDB] Could not fetch watch providers for {media_type}/{tmdb_id}: {exc}")
-                return {"flatrate": [], "rent": [], "buy": []}
+                return {region: {"flatrate": [], "rent": [], "buy": []} for region in regions}
 
-        us = data.get("results", {}).get("US") or {}
-
+        results = data.get("results", {})
         return {
-            kind: [p["provider_name"] for p in us.get(kind, []) if p.get("provider_name")]
-            for kind in ("flatrate", "rent", "buy")
+            region: {
+                kind: [p["provider_name"] for p in (results.get(region) or {}).get(kind, []) if p.get("provider_name")]
+                for kind in ("flatrate", "rent", "buy")
+            }
+            for region in regions
         }
 
     def get_title_logo(self, tmdb_id: int, media_type: str, data: dict | None = None) -> str | None:
