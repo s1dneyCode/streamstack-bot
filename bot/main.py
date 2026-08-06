@@ -17,7 +17,6 @@ In production this file is invoked by the GitHub Actions nightly workflow
 
 import os
 import sys
-import time
 from datetime import date
 
 from .tmdb import TmdbClient
@@ -343,7 +342,6 @@ def main() -> None:
         reverified += 1
 
         print(f"[BOT] Re-verified {title}: {providers if any(providers.values()) else '(no results — kept existing data)'}")
-        time.sleep(0.25)
 
     print(f"[BOT] Step 10 done. {reverified} titles re-verified.")
 
@@ -372,8 +370,6 @@ def main() -> None:
             print(f"[BOT] Updated popularity for {title}: {popularity} → score={popularity_score}")
         except Exception as exc:
             print(f"[BOT] Failed to update popularity for {title}: {exc}")
-
-        time.sleep(0.3)
 
     # ------------------------------------------------------------------ #
     # Step 11 — Update RT scores for movies due for re-verification       #
@@ -408,8 +404,6 @@ def main() -> None:
             print(f"[BOT] RT score {title}: {score}%")
             rt_updated += 1
 
-        time.sleep(0.5)
-
     print(f"[BOT] Step 11 done. {rt_updated} RT scores updated.")
 
     # ------------------------------------------------------------------ #
@@ -435,8 +429,6 @@ def main() -> None:
         else:
             db.update_streaming_last_checked(item["id"])
             print(f"[BOT] Step 11b {title}: still not found")
-
-        time.sleep(0.5)
 
     print(f"[BOT] Step 11b done. {rt_recovered} new RT scores found.")
 
@@ -478,11 +470,9 @@ def main() -> None:
             tmdb_seasons = tmdb.get_seasons(tmdb_id=tmdb_id)
         except Exception as exc:
             print(f"[BOT] Step 14 {title}: fetch failed — {exc}")
-            time.sleep(0.25)
             continue
 
         if not tmdb_seasons:
-            time.sleep(0.25)
             continue
 
         tmdb_season_numbers = {s["season_number"] for s in tmdb_seasons}
@@ -498,7 +488,6 @@ def main() -> None:
         new_season_numbers    = tmdb_season_numbers - stored_season_numbers
 
         if not new_season_numbers:
-            time.sleep(0.25)
             continue
 
         new_seasons_data = [s for s in tmdb_seasons if s["season_number"] in new_season_numbers]
@@ -512,13 +501,11 @@ def main() -> None:
                 continue
             _, episodes = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=s["season_number"])
             eps_inserted += db.upsert_episodes(season_id=season_id, episodes=episodes)
-            time.sleep(0.25)
 
         step14_shows_updated += 1
         step14_new_seasons   += len(new_seasons_data)
         step14_new_episodes  += eps_inserted
         print(f"[BOT] Step 14 {title}: {len(new_seasons_data)} new season(s), {eps_inserted} episodes")
-        time.sleep(0.5)
 
     print(f"[BOT] Step 14 done. {step14_shows_updated} shows updated, {step14_new_seasons} new seasons, {step14_new_episodes} new episodes.")
 
@@ -595,7 +582,6 @@ def main() -> None:
             _, fresh_eps = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=season_number)
         except Exception as exc:
             print(f"[BOT] Step 17 {title}: fetch failed — {exc}")
-            time.sleep(0.25)
             continue
 
         updated = 0
@@ -615,8 +601,6 @@ def main() -> None:
         step17_series   += 1
         if updated:
             print(f"[BOT] Step 17 {title}: {updated} episode date(s) refreshed (season {season_number})")
-
-        time.sleep(0.25)
 
     print(f"[BOT] Step 17 done. {step17_series} series processed, {step17_episodes} episode dates updated.")
 
@@ -655,12 +639,10 @@ def main() -> None:
             tmdb_seasons = tmdb.get_seasons(tmdb_id=tmdb_id)
         except Exception as exc:
             print(f"[BOT] Step 17b {title}: fetch failed — {exc}")
-            time.sleep(0.25)
             continue
 
         tmdb_season = next((s for s in tmdb_seasons if s["season_number"] == season_number), None)
         if not tmdb_season:
-            time.sleep(0.25)
             continue
 
         tmdb_episode_count = tmdb_season.get("episode_count") or 0
@@ -674,14 +656,12 @@ def main() -> None:
         )
 
         if tmdb_episode_count <= len(stored_eps):
-            time.sleep(0.25)
             continue
 
         try:
             _, fresh_eps = tmdb.get_season_episodes(tmdb_id=tmdb_id, season_number=season_number)
         except Exception as exc:
             print(f"[BOT] Step 17b {title}: season fetch failed — {exc}")
-            time.sleep(0.25)
             continue
 
         existing_nums = {row["episode_number"] for row in stored_eps}
@@ -691,8 +671,6 @@ def main() -> None:
             n = db.upsert_episodes(season_id=season_id, episodes=new_eps)
             step17b_episodes += n
             print(f"[BOT] Step 17b {title}: {n} new episode(s) inserted (season {season_number})")
-
-        time.sleep(0.25)
 
     print(f"[BOT] Step 17b done. {step17b_checked} series checked, {step17b_episodes} new episodes inserted.")
 

@@ -194,7 +194,6 @@ def main() -> None:
         except Exception as exc:
             print(f"[ENRICH]   trailers/credits: failed — {exc}")
             stats["errors"] += 1
-        time.sleep(0.25)
 
         # ── Step 4: Seasons (TV only) ────────────────────────────────────
         if media_type == "tv":
@@ -232,7 +231,6 @@ def main() -> None:
                             tmdb_id=tmdb_id, season_number=s["season_number"]
                         )
                         ep_count += db.upsert_episodes(season_id=sid, episodes=episodes)
-                        time.sleep(0.25)
                     db.update_tv_runtime(media_id=media_id)
                     stats["seasons"] += len(season_rows)
                     print(f"[ENRICH]   seasons: {len(season_rows)} seasons, {ep_count} episodes")
@@ -252,7 +250,6 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   logo: failed — {exc}")
                 stats["errors"] += 1
-            time.sleep(0.25)
 
         # ── Step 6: Certifications ──────────────────────────────────────
         if not row.get("certification"):
@@ -265,7 +262,6 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   cert: failed — {exc}")
                 stats["errors"] += 1
-            time.sleep(0.25)
 
         # ── Step 7: Runtime (movies only) ───────────────────────────────
         if media_type == "movie" and not row.get("runtime"):
@@ -279,7 +275,6 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   runtime: failed — {exc}")
                 stats["errors"] += 1
-            time.sleep(0.25)
 
         # ── Step 8: Genres ──────────────────────────────────────────────
         if not row.get("genres"):
@@ -293,7 +288,6 @@ def main() -> None:
             except Exception as exc:
                 print(f"[ENRICH]   genres: failed — {exc}")
                 stats["errors"] += 1
-            time.sleep(0.25)
 
         # ── Step 9: States ───────────────────────────────────────────────
         try:

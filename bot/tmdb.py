@@ -11,12 +11,17 @@ Reference: https://developer.themoviedb.org/reference/intro/getting-started
 import time
 import requests
 from bot.utils import format_date, clean_text
+from bot.rate_limiter import RateLimiter
 
 # Base URL for all TMDB v3 endpoints
 TMDB_BASE = "https://api.themoviedb.org/3"
 
 # Prefix used to build absolute poster URLs from TMDB's relative path strings
 POSTER_BASE = "https://image.tmdb.org/t/p/w500"
+
+# Conservative throttle — TMDB's documented limit is much higher (~50 req/s);
+# this keeps us well clear of it without needing per-call time.sleep()s.
+TMDB_RATE_LIMIT = 20.0  # requests/second
 
 _PRODUCER_JOBS = {"Producer", "Executive Producer"}
 
@@ -38,6 +43,7 @@ class TmdbClient:
         # The API key is passed as a query parameter on every request
         self.api_key = api_key
         self._genre_cache: dict[str, dict[int, str]] = {}
+        self._limiter = RateLimiter(rate=TMDB_RATE_LIMIT)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -48,18 +54,31 @@ class TmdbClient:
         Perform a GET request against *path* (relative to TMDB_BASE), merging
         *params* with the mandatory api_key parameter.
 
-        Retries up to *retries* times with a 2-second pause between attempts so
-        that transient network errors or TMDB rate-limit responses (429) don't
-        immediately crash the bot.  Raises the final exception if all attempts
-        are exhausted.
+        Throttled to TMDB_RATE_LIMIT req/s via a shared token-bucket limiter
+        (self._limiter) before every attempt, including retries.
+
+        Retries up to *retries* times so transient network errors or TMDB
+        rate-limit responses (429) don't immediately crash the bot. A 429
+        honors the Retry-After response header when present instead of the
+        flat 2-second pause used for other failures. Raises the final
+        exception if all attempts are exhausted.
         """
         url = f"{TMDB_BASE}{path}"
         merged_params = {"api_key": self.api_key, **(params or {})}
 
         last_exc: Exception | None = None
         for attempt in range(1, retries + 1):
+            self._limiter.acquire()
             try:
                 response = requests.get(url, params=merged_params, timeout=15)
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    wait = float(retry_after) if retry_after else 2.0
+                    print(f"[TMDB] Rate limited (429, attempt {attempt}/{retries}) — waiting {wait}s...")
+                    last_exc = requests.HTTPError(f"429 Too Many Requests: {url}")
+                    if attempt < retries:
+                        time.sleep(wait)
+                    continue
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:
