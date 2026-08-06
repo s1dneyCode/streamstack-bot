@@ -57,11 +57,15 @@ class TmdbClient:
         Throttled to TMDB_RATE_LIMIT req/s via a shared token-bucket limiter
         (self._limiter) before every attempt, including retries.
 
-        Retries up to *retries* times so transient network errors or TMDB
-        rate-limit responses (429) don't immediately crash the bot. A 429
-        honors the Retry-After response header when present instead of the
-        flat 2-second pause used for other failures. Raises the final
-        exception if all attempts are exhausted.
+        Retries up to *retries* times — but only for errors that can
+        genuinely succeed on a later attempt: 429 (honoring the Retry-After
+        header instead of the flat 2-second pause used elsewhere), 5xx
+        server errors, and network/timeout errors. Non-429 4xx client
+        errors (404 Not Found, 401 Unauthorized, etc.) are raised
+        immediately on the first attempt — a missing season or a bad key
+        will never succeed just by asking again, so retrying it is pure
+        wasted time. Raises the final exception if all attempts are
+        exhausted (or immediately, for a non-retryable 4xx).
         """
         url = f"{TMDB_BASE}{path}"
         merged_params = {"api_key": self.api_key, **(params or {})}
@@ -82,6 +86,13 @@ class TmdbClient:
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:
+                status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
+                if status is not None and 400 <= status < 500:
+                    # Non-retryable client error — fail fast, no point burning
+                    # the remaining attempts on a request that can't succeed.
+                    print(f"[TMDB] {status} for {url} — not retrying (client error).")
+                    raise
+
                 last_exc = exc
                 print(
                     f"[TMDB] Request failed (attempt {attempt}/{retries}): {exc}"
