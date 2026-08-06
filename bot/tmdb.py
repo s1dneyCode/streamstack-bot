@@ -1117,6 +1117,42 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique discover {media_type} (language={language}).")
         return results
 
+    def discover_page(self, media_type: str, year: int, page: int) -> tuple[list[dict], int]:
+        """
+        Fetch a single page of /discover/{movie|tv} for a release-year
+        window, for coverage_sweep.py's slice-and-cursor historical walk.
+
+        sort_by=popularity.desc, vote_count.gte=3, include_adult=false, and
+        the year expressed as a full-year date range (primary_release_date
+        for movies, first_air_date for TV). Deliberately no language
+        param — the caller applies passes_sync_quality_filter() in Python
+        as the final gate instead.
+
+        Returns (raw_results, total_pages) — raw TMDB result dicts, not the
+        normalized shape the other get_discover_* helpers return, since the
+        caller needs the discover item's own fields (poster_path,
+        vote_count, popularity, genre_ids, ...) to run the quality filter
+        and build a bare row without a second per-item detail fetch.
+        total_pages is capped at TMDB's hard 500-page limit for this
+        endpoint.
+        """
+        endpoint = "/discover/movie" if media_type == "movie" else "/discover/tv"
+        date_field = "primary_release_date" if media_type == "movie" else "first_air_date"
+
+        data = self._get(
+            endpoint,
+            params={
+                "sort_by": "popularity.desc",
+                "vote_count.gte": 3,
+                "include_adult": "false",
+                f"{date_field}.gte": f"{year}-01-01",
+                f"{date_field}.lte": f"{year}-12-31",
+                "page": page,
+            },
+        )
+        total_pages = min(data.get("total_pages") or 1, 500)
+        return data.get("results", []), total_pages
+
     def get_trending_movies(self, pages: int = 3, genre_map: dict[int, str] | None = None) -> list[dict]:
         """Fetch trending movies this week via /trending/movie/week."""
         genre_map = genre_map or {}

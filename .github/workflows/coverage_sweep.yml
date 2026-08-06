@@ -1,0 +1,36 @@
+name: Coverage Sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: 'Discover pages to process this run'
+        required: false
+        default: '20'
+  # Cron disabled until manually validated — workflow_dispatch-only for now.
+  # schedule:
+  #   - cron: '0 10 * * *'  # 10am UTC daily — after nightly (6am), sync changes (7am), daily verify (8am), enrichment (9am)
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  coverage-sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run coverage sweep
+        run: python -m bot.coverage_sweep --pages=${{ github.event.inputs.pages || '20' }}
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

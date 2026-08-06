@@ -40,8 +40,10 @@ Expected schema (create once in the Supabase dashboard / migrations):
         key        text  PRIMARY KEY
         value      jsonb
         updated_at timestamptz DEFAULT now()
-        -- Generic key/value store for cross-run bot state. Currently used
-        -- by sync_changes.py to persist {"last_synced_at": "<iso ts>"}.
+        -- Generic key/value store for cross-run bot state. Known keys:
+        --   last_synced_at   (sync_changes.py)    {"last_synced_at": "<iso ts>"}
+        --   discover_cursor  (coverage_sweep.py)  {"media_type", "year", "page"}
+        --                                         or {"done": true} once exhausted
 """
 
 import math
@@ -554,19 +556,25 @@ class SupabaseClient:
         return self.client.storage.from_(bucket).get_public_url(path)
 
     def get_bot_state(self, key: str) -> dict | list | str | int | float | bool | None:
-        """Return the jsonb value stored under *key* in bot_state, or None if unset."""
-        try:
-            row = (
-                self.client.table("bot_state")
-                .select("value")
-                .eq("key", key)
-                .maybe_single()
-                .execute()
-            )
-            return row.data.get("value") if row.data else None
-        except Exception as exc:
-            print(f"[Supabase] Error reading bot_state[{key}]: {exc}")
-            return None
+        """
+        Return the jsonb value stored under *key* in bot_state, or None if
+        the key genuinely has no stored value yet.
+
+        Raises on a read failure (network, auth, etc.) instead of also
+        returning None for that case — a caller that can't tell "no prior
+        state" apart from "the read failed" risks silently resetting state
+        it should have left untouched (e.g. a cursor) on a transient blip.
+        Callers that want the old graceful-degrade-to-default behavior
+        should catch this explicitly.
+        """
+        row = (
+            self.client.table("bot_state")
+            .select("value")
+            .eq("key", key)
+            .maybe_single()
+            .execute()
+        )
+        return row.data.get("value") if row.data else None
 
     def set_bot_state(self, key: str, value) -> None:
         """Upsert *value* (any JSON-serializable object) under *key* in bot_state."""

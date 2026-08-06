@@ -35,7 +35,7 @@ import requests
 
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
-from .filters import passes_sync_quality_filter
+from .filters import passes_sync_quality_filter, build_bare_media_record
 
 DEFAULT_WINDOW_HOURS = 24
 MAX_WINDOW_DAYS = 14
@@ -61,7 +61,12 @@ def _compute_window(db: SupabaseClient, now: datetime) -> tuple[datetime, str, s
     only, so a run partway through window_start's day re-covers that whole
     day — harmless, since re-processing an id is idempotent).
     """
-    last_synced_raw = db.get_bot_state("last_synced_at")
+    try:
+        last_synced_raw = db.get_bot_state("last_synced_at")
+    except Exception as exc:
+        print(f"[CHANGES] WARNING: failed to read last_synced_at ({exc}) — defaulting to {DEFAULT_WINDOW_HOURS}h window.")
+        last_synced_raw = None
+
     last_synced = None
     if last_synced_raw:
         try:
@@ -139,23 +144,21 @@ def main() -> None:
                 continue
 
             title = detail.get("title") or detail.get("name")
-            media_record = {
-                "tmdb_id":           tmdb_id,
-                "title":             title,
-                "overview":          detail.get("overview"),
-                "poster_path":       detail.get("poster_path"),
-                "media_type":        media_type,
-                "release_date":      detail.get("release_date") or detail.get("first_air_date"),
-                "status":            detail.get("status"),
-                "original_language": detail.get("original_language"),
-                "tmdb_score":        round((detail.get("vote_average") or 0) * 10),
-                "genres":            [g["name"] for g in detail.get("genres", []) if g.get("name")],
-                "imdb_id":           detail.get("imdb_id"),
-                "popularity":        detail.get("popularity", 0.0),
-                "vote_count":        detail.get("vote_count", 0),
-                "is_in_theatres":    False,
-                "is_streamable_now": False,
-            }
+            media_record = build_bare_media_record(
+                tmdb_id=tmdb_id,
+                media_type=media_type,
+                title=title,
+                overview=detail.get("overview"),
+                poster_path=detail.get("poster_path"),
+                release_date=detail.get("release_date") or detail.get("first_air_date"),
+                original_language=detail.get("original_language"),
+                vote_average=detail.get("vote_average"),
+                vote_count=detail.get("vote_count"),
+                popularity=detail.get("popularity"),
+                genres=[g["name"] for g in detail.get("genres", []) if g.get("name")],
+                imdb_id=detail.get("imdb_id"),
+                status=detail.get("status"),
+            )
 
             row_id = db.upsert_media(media_record)
             if row_id:
