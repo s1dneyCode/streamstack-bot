@@ -7,7 +7,11 @@ an opaque "save this thing" interface and never constructs raw SQL.
 Expected schema (create once in the Supabase dashboard / migrations):
 
     public.media
-        id              bigint  PRIMARY KEY GENERATED ALWAYS AS IDENTITY
+        id              uuid    PRIMARY KEY DEFAULT gen_random_uuid()
+                                      -- corrected 2026-08 — this column is uuid, not the
+                                      -- bigint this docstring previously (and wrongly)
+                                      -- documented; confirmed via the Flutter app's own
+                                      -- FK declarations (media_id uuid references media(id))
         tmdb_id         bigint  UNIQUE NOT NULL
         title           text
         overview        text
@@ -24,12 +28,29 @@ Expected schema (create once in the Supabase dashboard / migrations):
                                       -- when TMDB 404s a tmdb_id — soft-flag, row is
                                       -- NEVER deleted. Excluded from reverify and the
                                       -- enrichment scan once set.
+        trakt_watchers_week     int         -- NULL unless currently on a Trakt weekly-watched
+                                             -- list; cleared (not the row) when it drops off
+        trakt_trending_rank     int         -- NULL unless currently on Trakt's trending list;
+                                             -- 1-based rank, cleared when it drops off
+        trakt_anticipated_score int         -- NULL unless currently on Trakt's anticipated
+                                             -- list (list_count); cleared when it drops off
+        trakt_rating            numeric(4,2) -- Trakt's all-time rating; NOT cleared on decay —
+                                             -- unlike the three fields above, this isn't a
+                                             -- weekly-list membership signal
+        trakt_vote_count        int         -- Trakt's all-time vote count; also not cleared
+        trakt_synced_at         timestamptz -- last time any Trakt list write touched this row;
+                                             -- sync_trakt.py Phase A decays the three list
+                                             -- signals above on any row where this predates
+                                             -- the current run (i.e. it fell off every list)
+        trakt_related_synced_at timestamptz -- NULL until sync_trakt.py Phase B populates this
+                                             -- row's media_related rows; drives that phase's
+                                             -- state scan, same pattern as enriched_at
         created_at      timestamptz   DEFAULT now()
         updated_at      timestamptz   DEFAULT now()
 
     public.streaming_availability
         id                bigint      PRIMARY KEY GENERATED ALWAYS AS IDENTITY
-        media_id          bigint      REFERENCES media(id) ON DELETE CASCADE
+        media_id          uuid        REFERENCES media(id) ON DELETE CASCADE
         provider_name     text
         region            text
         monetization_type text        -- 'flatrate' | 'rent' | 'buy'
@@ -44,6 +65,18 @@ Expected schema (create once in the Supabase dashboard / migrations):
         --   last_synced_at   (sync_changes.py)    {"last_synced_at": "<iso ts>"}
         --   discover_cursor  (coverage_sweep.py)  {"media_type", "year", "page"}
         --                                         or {"done": true} once exhausted
+
+    public.media_related
+        media_id           uuid        REFERENCES media(id)  -- the title these are related to
+        related_tmdb_id    bigint      -- NOT a media(tmdb_id) FK — the related title may not
+                                       -- be in our catalog at all
+        related_media_type text        -- 'movie' | 'tv'
+        rank               int         -- 1-based order as Trakt returned it
+        source             text        -- always 'trakt' for now
+        synced_at          timestamptz
+        PRIMARY KEY (media_id, related_media_type, related_tmdb_id)
+        -- Populated by sync_trakt.py Phase B, one full replace per title
+        -- (see SupabaseClient.replace_media_related) — never a partial update.
 """
 
 import math
@@ -635,6 +668,145 @@ class SupabaseClient:
             self.client.table("media").update({"tmdb_missing_at": now}).eq("id", media_id).execute()
         except Exception as exc:
             print(f"[Supabase] Error setting tmdb_missing_at for media_id={media_id}: {exc}")
+
+    # ------------------------------------------------------------------
+    # Trakt integration (shadow mode) — sync_trakt.py
+    # ------------------------------------------------------------------
+
+    def get_catalog_tmdb_index(self, tmdb_ids: list[int]) -> dict[int, dict]:
+        """
+        Return {tmdb_id: {"id": <uuid>, "media_type": <str>}} for whichever
+        of *tmdb_ids* already exist in public.media. Used by sync_trakt.py
+        to know which Trakt list items we actually have (and log the
+        misses) before writing any trakt_* column, and to guard against
+        writing a movie's Trakt signals onto a same-numbered tv row or vice
+        versa (tmdb_id is unique per media_type at TMDB, not globally, but
+        this table's tmdb_id column is a single UNIQUE constraint).
+
+        Chunked at 200 ids per request, same as get_media_ids_by_tmdb_ids.
+        """
+        index: dict[int, dict] = {}
+        chunk_size = 200
+        for i in range(0, len(tmdb_ids), chunk_size):
+            chunk = tmdb_ids[i:i + chunk_size]
+            try:
+                response = (
+                    self.client.table("media")
+                    .select("id, tmdb_id, media_type")
+                    .in_("tmdb_id", chunk)
+                    .execute()
+                )
+            except Exception as exc:
+                print(f"[Supabase] Error looking up catalog index for a chunk of tmdb_ids: {exc}")
+                continue
+            for row in response.data or []:
+                index[row["tmdb_id"]] = {"id": row["id"], "media_type": row["media_type"]}
+        return index
+
+    def update_trakt_list_signals(self, tmdb_id: int, fields: dict, synced_at_iso: str) -> None:
+        """
+        Narrow update of Trakt list-derived signal columns on an existing
+        media row, keyed by tmdb_id — never touches any other column
+        (unlike upsert_media, which would reset every field not present in
+        its payload).
+
+        *fields* may contain any subset of: trakt_watchers_week,
+        trakt_trending_rank, trakt_anticipated_score, trakt_rating,
+        trakt_vote_count. Always stamps trakt_synced_at = synced_at_iso so
+        decay_trakt_heat() can later tell this row was refreshed this run.
+        """
+        payload = {**fields, "trakt_synced_at": synced_at_iso}
+        try:
+            self.client.table("media").update(payload).eq("tmdb_id", tmdb_id).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error updating trakt list signals for tmdb_id={tmdb_id}: {exc}")
+
+    def decay_trakt_heat(self, run_start_iso: str) -> None:
+        """
+        Null out trakt_watchers_week, trakt_trending_rank, and
+        trakt_anticipated_score on any row whose trakt_synced_at predates
+        *run_start_iso* — i.e. it didn't appear on any Trakt list this run,
+        so its old heat numbers are stale. A row with trakt_synced_at IS
+        NULL (never synced) is correctly left alone: NULL < anything is
+        NULL, not true, in Postgres, so .lt() never matches it.
+
+        trakt_rating/trakt_vote_count (Trakt's all-time rating, not a
+        weekly list-membership signal) are deliberately left untouched —
+        falling off the weekly watched/trending/anticipated lists doesn't
+        mean the rating became stale.
+        """
+        try:
+            self.client.table("media").update({
+                "trakt_watchers_week": None,
+                "trakt_trending_rank": None,
+                "trakt_anticipated_score": None,
+            }).lt("trakt_synced_at", run_start_iso).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error decaying stale trakt heat: {exc}")
+
+    def get_titles_for_related_drain(self, limit: int) -> list[dict]:
+        """
+        Return up to *limit* media rows (id, tmdb_id, media_type) where
+        trakt_related_synced_at IS NULL, ordered by popularity desc — the
+        state-driven drain queue for sync_trakt.py's related-titles phase.
+        Mirrors enrich_new_titles.py's enriched_at IS NULL scan, including
+        the tmdb_missing_at exclusion so a soft-flagged-dead title isn't
+        drained forever.
+        """
+        return (
+            self.client.table("media")
+            .select("id, tmdb_id, media_type")
+            .is_("trakt_related_synced_at", "null")
+            .is_("tmdb_missing_at", "null")
+            .order("popularity", desc=True)
+            .limit(limit)
+            .execute()
+            .data or []
+        )
+
+    def replace_media_related(self, media_id_uuid: str, rows: list[dict], synced_at_iso: str) -> None:
+        """
+        Replace all media_related rows for *media_id_uuid* with *rows* — a
+        delete-then-insert so titles that drop out of Trakt's related list
+        don't linger. Deletes even when *rows* is empty, so a title with
+        zero current related results still correctly clears out stale rows
+        from a prior sync.
+
+        *rows* items must contain: related_tmdb_id, related_media_type,
+        rank; source='trakt' and synced_at=synced_at_iso are added here.
+
+        Raises on failure (unlike most narrow updates in this module) —
+        the caller (sync_trakt.py) must not stamp trakt_related_synced_at
+        for a title whose replace didn't actually succeed, or it would
+        never be retried.
+        """
+        try:
+            self.client.table("media_related").delete().eq("media_id", media_id_uuid).execute()
+            if rows:
+                payload = [
+                    {
+                        "media_id": media_id_uuid,
+                        "related_tmdb_id": r["related_tmdb_id"],
+                        "related_media_type": r["related_media_type"],
+                        "rank": r["rank"],
+                        "source": "trakt",
+                        "synced_at": synced_at_iso,
+                    }
+                    for r in rows
+                ]
+                self.client.table("media_related").insert(payload).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error replacing media_related for media_id={media_id_uuid}: {exc}")
+            raise
+
+    def stamp_trakt_related_synced(self, media_id_uuid: str, synced_at_iso: str) -> None:
+        """Set trakt_related_synced_at on the media row by internal id."""
+        try:
+            self.client.table("media").update(
+                {"trakt_related_synced_at": synced_at_iso}
+            ).eq("id", media_id_uuid).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error stamping trakt_related_synced_at for media_id={media_id_uuid}: {exc}")
 
     # ------------------------------------------------------------------
     # Read operations
