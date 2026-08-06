@@ -18,6 +18,12 @@ Expected schema (create once in the Supabase dashboard / migrations):
         rt_score        smallint      -- 0-100 or NULL
         is_in_theatres  boolean       -- always False for now
         is_streamable_now boolean
+        enriched_at     timestamptz   -- NULL until enrich_new_titles.py completes a row
+                                      -- with no step raising; drives its state scan
+        tmdb_missing_at timestamptz   -- NULL normally; set (never cleared automatically)
+                                      -- when TMDB 404s a tmdb_id — soft-flag, row is
+                                      -- NEVER deleted. Excluded from reverify and the
+                                      -- enrichment scan once set.
         created_at      timestamptz   DEFAULT now()
         updated_at      timestamptz   DEFAULT now()
 
@@ -29,6 +35,13 @@ Expected schema (create once in the Supabase dashboard / migrations):
         monetization_type text        -- 'flatrate' | 'rent' | 'buy'
         first_seen_at     timestamptz DEFAULT now()  -- set once, never overwritten on update
         UNIQUE (media_id, provider_name, region, monetization_type)
+
+    public.bot_state
+        key        text  PRIMARY KEY
+        value      jsonb
+        updated_at timestamptz DEFAULT now()
+        -- Generic key/value store for cross-run bot state. Currently used
+        -- by sync_changes.py to persist {"last_synced_at": "<iso ts>"}.
 """
 
 import math
@@ -540,6 +553,84 @@ class SupabaseClient:
         """Return the public URL for a file stored in Supabase Storage."""
         return self.client.storage.from_(bucket).get_public_url(path)
 
+    def get_bot_state(self, key: str) -> dict | list | str | int | float | bool | None:
+        """Return the jsonb value stored under *key* in bot_state, or None if unset."""
+        try:
+            row = (
+                self.client.table("bot_state")
+                .select("value")
+                .eq("key", key)
+                .maybe_single()
+                .execute()
+            )
+            return row.data.get("value") if row.data else None
+        except Exception as exc:
+            print(f"[Supabase] Error reading bot_state[{key}]: {exc}")
+            return None
+
+    def set_bot_state(self, key: str, value) -> None:
+        """Upsert *value* (any JSON-serializable object) under *key* in bot_state."""
+        try:
+            self.client.table("bot_state").upsert(
+                {"key": key, "value": value, "updated_at": datetime.now(timezone.utc).isoformat()},
+                on_conflict="key",
+            ).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error writing bot_state[{key}]: {exc}")
+            raise
+
+    def get_media_ids_by_tmdb_ids(self, tmdb_ids: list[int]) -> dict[int, int]:
+        """
+        Return a {tmdb_id: internal id} map for whichever of *tmdb_ids*
+        already exist in public.media. Used by sync_changes.py to tell
+        which changed ids are new inserts vs. existing rows in one batch
+        instead of a query per id.
+
+        Chunked at 200 ids per request to stay well under PostgREST's URL
+        length limit for `.in_()` filters.
+        """
+        mapping: dict[int, int] = {}
+        chunk_size = 200
+        for i in range(0, len(tmdb_ids), chunk_size):
+            chunk = tmdb_ids[i:i + chunk_size]
+            try:
+                response = (
+                    self.client.table("media")
+                    .select("id, tmdb_id")
+                    .in_("tmdb_id", chunk)
+                    .execute()
+                )
+            except Exception as exc:
+                print(f"[Supabase] Error looking up media ids for a chunk of tmdb_ids: {exc}")
+                continue
+            for row in response.data or []:
+                mapping[row["tmdb_id"]] = row["id"]
+        return mapping
+
+    def set_tmdb_missing(self, media_id: int) -> None:
+        """
+        Stamp tmdb_missing_at = now() on the media row — soft-flag a title
+        TMDB 404s on. Never deletes the row, and tmdb_missing_at is never
+        cleared automatically once set.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            self.client.table("media").update({"tmdb_missing_at": now}).eq("id", media_id).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error setting tmdb_missing_at for media_id={media_id}: {exc}")
+
+    def reset_streaming_last_checked(self, media_id: int) -> None:
+        """
+        Clear streaming_last_checked back to NULL on the media row so it
+        sorts to the front of get_titles_to_reverify()'s nullsfirst=True
+        ordering — i.e. re-verified sooner rather than waiting out its
+        normal staleness window.
+        """
+        try:
+            self.client.table("media").update({"streaming_last_checked": None}).eq("id", media_id).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error resetting streaming_last_checked for media_id={media_id}: {exc}")
+
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
@@ -560,6 +651,10 @@ class SupabaseClient:
           - TV released ≤ 30 days ago, not streamable               — every 3 days
           - TV released 30-90 days ago, not streamable              — every 7 days
           - TV released > 90 days ago, not streamable               — every 7 days
+
+        Every bucket also excludes tmdb_missing_at IS NOT NULL — a title
+        TMDB no longer has (soft-flagged by sync_changes.py or the
+        enrichment scan, never deleted) has no availability to re-verify.
 
         Bounded to *limit* titles total (defaults to the REVERIFY_LIMIT env
         var if set, else _DEFAULT_REVERIFY_LIMIT). Every bucket query is
@@ -598,6 +693,7 @@ class SupabaseClient:
             _add((self.client.table("media").select(cols)
                 .gt("release_date", today_str)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])
@@ -608,6 +704,7 @@ class SupabaseClient:
                 .lte("release_date", today_str)
                 .gte("release_date", sixty_days_ago)
                 .lt("streaming_last_checked", seven_days_ago)
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])
@@ -617,6 +714,7 @@ class SupabaseClient:
                 .eq("is_in_theatres", True)
                 .lt("release_date", sixty_days_ago)
                 .lt("streaming_last_checked", seven_days_ago)
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])
@@ -625,6 +723,7 @@ class SupabaseClient:
             _add((self.client.table("media").select(cols)
                 .eq("is_streamable_now", True)
                 .lt("streaming_last_checked", seven_days_ago)
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])
@@ -634,6 +733,7 @@ class SupabaseClient:
                 .lt("release_date", ninety_days_ago)
                 .gte("release_date", one_year_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])
@@ -642,6 +742,7 @@ class SupabaseClient:
             _add((self.client.table("media").select(cols)
                 .lt("release_date", one_year_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{ninety_days_ago}")
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])
@@ -653,6 +754,7 @@ class SupabaseClient:
                 .lte("release_date", today_str)
                 .gte("release_date", thirty_days_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{three_days_ago}")
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])
@@ -664,6 +766,7 @@ class SupabaseClient:
                 .lt("release_date", thirty_days_ago)
                 .gte("release_date", ninety_days_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])
@@ -674,6 +777,7 @@ class SupabaseClient:
                 .eq("is_streamable_now", False)
                 .lt("release_date", ninety_days_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
                 .limit(limit)
                 .execute()).data or [])

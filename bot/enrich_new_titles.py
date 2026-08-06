@@ -2,24 +2,30 @@
 Enrichment bot: state-driven scan that populates all secondary fields for
 any title that hasn't been enriched yet, regardless of when it was created.
 
-Selection is WHERE enriched_at IS NULL, newest created_at first, capped at
---limit (or the ENRICH_LIMIT env var, default 500) titles per run. This
-replaces the old created_at >= NOW() - Xh time-window query — a title
-missed by one run (nightly ran long, enrichment itself failed, etc.) is no
-longer orphaned forever; it just stays NULL and gets picked up by the next
-run. Bare rows from bulk_import.py self-enrich the same way, no manual
+Selection is WHERE enriched_at IS NULL AND tmdb_missing_at IS NULL, newest
+created_at first, capped at --limit (or the ENRICH_LIMIT env var, default
+500) titles per run. This replaces the old created_at >= NOW() - Xh
+time-window query — a title missed by one run (nightly ran long,
+enrichment itself failed, etc.) is no longer orphaned forever; it just
+stays NULL and gets picked up by the next run. Bare rows from
+bulk_import.py and sync_changes.py self-enrich the same way, no manual
 full-backfill needed.
 
 A row's enriched_at is stamped only if every step below ran without
 raising — an empty result (e.g. no trailer exists on TMDB) still counts as
 a completed attempt. If any step raises, enriched_at is left NULL, the
 failure is logged and counted, and the row is retried on a future run
-(never retried within the same run — a poison row can't loop forever).
+(never retried within the same run — a poison row can't loop forever). The
+one exception is a 404 on the base detail fetch (title removed from TMDB
+entirely) — that sets tmdb_missing_at instead, so the row is never
+retried again rather than looping forever on a title that can't succeed.
 
 Every step except States is skipped when its target is already populated,
 making the script idempotent — safe to re-run without wasting API calls.
 
 Steps per title (in order):
+  0. Base detail    — existence check; a 404 here flags tmdb_missing_at and
+                       skips the rest of the row (always runs)
   1. Images         — upload poster + carousel (skipped if poster_url already set)
   2. Trailers       — fetch YouTube trailers from TMDB (skipped if media_trailers rows exist)
   3. Credits        — fetch cast, directors, writers, producers (skipped if media_credits rows exist)
@@ -39,6 +45,8 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+
+import requests
 
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
@@ -104,6 +112,7 @@ def main() -> None:
             "genres, runtime"
         )
         .is_("enriched_at", "null")
+        .is_("tmdb_missing_at", "null")
         .order("created_at", desc=True)
         .limit(limit)
         .execute()
@@ -123,6 +132,7 @@ def main() -> None:
         "genres":   0,
         "states":   0,
         "errors":   0,
+        "missing":  0,
     }
     enriched_count = 0
 
@@ -139,6 +149,26 @@ def main() -> None:
         # sweep (no exceptions — an empty/not-found result is NOT an
         # exception) gets enriched_at stamped at the end.
         row_had_error = False
+
+        # ── Step 0: Base detail — existence check ────────────────────────
+        # A confirmed 404 means TMDB no longer has this title at all; every
+        # other step below would 404 too, so flag it and move on instead of
+        # burning the remaining API calls finding that out step by step.
+        try:
+            tmdb._get(f"/{media_type}/{tmdb_id}")
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                db.set_tmdb_missing(media_id)
+                stats["missing"] += 1
+                print("[ENRICH]   base detail: 404 — gone from TMDB, flagged tmdb_missing_at (won't retry).")
+                continue
+            print(f"[ENRICH]   base detail: failed — {exc}")
+            stats["errors"] += 1
+            row_had_error = True
+        except Exception as exc:
+            print(f"[ENRICH]   base detail: failed — {exc}")
+            stats["errors"] += 1
+            row_had_error = True
 
         # ── Step 1: Images ──────────────────────────────────────────────
         if not row.get("poster_url"):
@@ -383,13 +413,14 @@ def main() -> None:
         db.client.table("media")
         .select("id", count="exact")
         .is_("enriched_at", "null")
+        .is_("tmdb_missing_at", "null")
         .limit(1)
         .execute()
         .count or 0
     )
     print(
         f"\n[ENRICH] SUMMARY scanned={scanned} enriched={enriched_count} "
-        f"errors={stats['errors']} remaining_null={remaining_null}"
+        f"missing={stats['missing']} errors={stats['errors']} remaining_null={remaining_null}"
     )
 
 

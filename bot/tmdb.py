@@ -1504,3 +1504,39 @@ class TmdbClient:
         except Exception as exc:
             print(f"[TMDB] Could not fetch external_ids for {media_type}/{tmdb_id}: {exc}")
             return None
+
+    def get_movie_changes(self, start_date: str, end_date: str) -> list[int]:
+        """
+        Return every distinct movie tmdb_id that changed between
+        *start_date* and *end_date* (YYYY-MM-DD, inclusive) via
+        /movie/changes, fully paginated. TMDB caps this range at 14 days.
+        """
+        return self._get_changed_ids("/movie/changes", start_date, end_date)
+
+    def get_tv_changes(self, start_date: str, end_date: str) -> list[int]:
+        """
+        Return every distinct TV tmdb_id that changed between *start_date*
+        and *end_date* (YYYY-MM-DD, inclusive) via /tv/changes, fully
+        paginated. TMDB caps this range at 14 days.
+        """
+        return self._get_changed_ids("/tv/changes", start_date, end_date)
+
+    def _get_changed_ids(self, endpoint: str, start_date: str, end_date: str) -> list[int]:
+        ids: list[int] = []
+        seen: set[int] = set()
+        page = 1
+        total_pages = 1
+        while page <= total_pages:
+            data = self._get(
+                endpoint,
+                params={"start_date": start_date, "end_date": end_date, "page": page},
+            )
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
+                if tmdb_id is not None and tmdb_id not in seen:
+                    seen.add(tmdb_id)
+                    ids.append(tmdb_id)
+            total_pages = data.get("total_pages") or 1
+            print(f"[TMDB] {endpoint}: page {page}/{total_pages} ({start_date} to {end_date}), {len(ids)} id(s) so far...")
+            page += 1
+        return ids

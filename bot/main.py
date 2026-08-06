@@ -23,10 +23,7 @@ from datetime import date
 from .tmdb import TmdbClient
 from .omdb import OmdbClient
 from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES, ALLOWED_PROVIDERS
-
-# Mirrors _ALLOWED_LANGUAGES in bulk_import.py (source of truth) — duplicated
-# here because that constant is function-local there, not importable.
-_ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh', 'tl'}
+from .filters import ALLOWED_LANGUAGES
 
 
 def load_env() -> dict[str, str]:
@@ -273,7 +270,7 @@ def main() -> None:
             continue
 
         # --- Language filter ---------------------------------------------
-        if original_language not in _ALLOWED_LANGUAGES:
+        if original_language not in ALLOWED_LANGUAGES:
             print(f"[BOT] Skipping {title}: original_language={original_language} (language filter)")
             continue
 

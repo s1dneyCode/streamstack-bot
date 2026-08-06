@@ -15,6 +15,7 @@ from datetime import date, timedelta
 
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
+from .filters import ALLOWED_LANGUAGES
 
 DEFAULT_BATCH_SIZE = 500
 MAX_BATCH_SIZE     = 10000
@@ -344,13 +345,12 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Step 7b — Quality filters (language + tiered vote_count)            #
     # ------------------------------------------------------------------ #
-    _ALLOWED_LANGUAGES = {'en', 'es', 'fr', 'de', 'ko', 'ja', 'pt', 'it', 'zh', 'tl'}
     _CUTOFF_DATE = date.today() - timedelta(days=365)
     _HISTORICAL_TV_EXCLUDED_GENRES = {'Kids', 'Soap', 'Talk'}
 
     def _passes_filters(item: dict) -> bool:
         lang = item.get("original_language")
-        if lang not in _ALLOWED_LANGUAGES:
+        if lang not in ALLOWED_LANGUAGES:
             return False
 
         votes = item.get("vote_count") or 0
