@@ -140,36 +140,42 @@ def main() -> None:
                 stats["errors"] += 1
             time.sleep(0.25)
 
-        # ── Step 2: Trailers ────────────────────────────────────────────
+        # ── Step 2+3: Trailers & Credits (one combined detail call) ──────
+        # Cheap DB-only existence checks first; only if at least one of the
+        # two is missing do we hit TMDB, and then only once — videos and
+        # credits (or aggregate_credits for TV) appended to the same
+        # /movie|tv/{id} call instead of two separate requests.
         try:
-            existing = (
+            has_trailers = bool(
                 db.client.table("media_trailers")
-                .select("media_id")
-                .eq("media_id", media_id)
-                .limit(1)
-                .execute()
+                .select("media_id").eq("media_id", media_id).limit(1).execute().data
             )
-            if not existing.data:
-                videos = tmdb.get_videos(tmdb_id=tmdb_id, media_type=media_type)
+            has_credits = bool(
+                db.client.table("media_credits")
+                .select("media_id").eq("media_id", media_id).limit(1).execute().data
+            )
+
+            append_fields = []
+            if not has_trailers:
+                append_fields.append("videos")
+            if not has_credits:
+                append_fields.append("aggregate_credits" if media_type == "tv" else "credits")
+
+            detail: dict = {}
+            if append_fields:
+                detail = tmdb._get(
+                    f"/{media_type}/{tmdb_id}",
+                    params={"append_to_response": ",".join(append_fields)},
+                )
+
+            if not has_trailers:
+                videos = tmdb.get_videos(tmdb_id=tmdb_id, media_type=media_type, data=detail.get("videos", {}))
                 n = db.upsert_trailers(media_id=media_id, trailers=videos)
                 stats["trailers"] += n
                 print(f"[ENRICH]   trailers: {n}")
-        except Exception as exc:
-            print(f"[ENRICH]   trailers: failed — {exc}")
-            stats["errors"] += 1
-        time.sleep(0.25)
 
-        # ── Step 3: Credits ─────────────────────────────────────────────
-        try:
-            existing = (
-                db.client.table("media_credits")
-                .select("media_id")
-                .eq("media_id", media_id)
-                .limit(1)
-                .execute()
-            )
-            if not existing.data:
-                result = tmdb.get_credits(tmdb_id=tmdb_id, media_type=media_type)
+            if not has_credits:
+                result = tmdb.get_credits(tmdb_id=tmdb_id, media_type=media_type, data=detail)
                 db.upsert_credits(
                     media_id=media_id,
                     directors=result["directors"],
@@ -186,7 +192,7 @@ def main() -> None:
                     stats["credits"] += 1
                 print(f"[ENRICH]   credits: {n} rows")
         except Exception as exc:
-            print(f"[ENRICH]   credits: failed — {exc}")
+            print(f"[ENRICH]   trailers/credits: failed — {exc}")
             stats["errors"] += 1
         time.sleep(0.25)
 

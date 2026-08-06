@@ -1185,7 +1185,7 @@ class TmdbClient:
         print(f"[TMDB] Collected {len(results)} unique trending TV shows.")
         return results
 
-    def get_credits(self, tmdb_id: int, media_type: str) -> dict:
+    def get_credits(self, tmdb_id: int, media_type: str, data: dict | None = None) -> dict:
         """
         Return credits for a title, split by media_type.
 
@@ -1194,15 +1194,30 @@ class TmdbClient:
 
         TV      → /tv/{id} (created_by) + /tv/{id}/aggregate_credits (cast top-20)
                   created_by from show detail, no writers, cast (top-20)
+
+        Unlike this client's other get_*(data=...) helpers, *data* here is
+        the *detail* payload (whatever /movie or /tv/{id} call the caller
+        already made), not an isolated sub-resource response — because
+        TV's created_by isn't a separate sub-resource, it's already a
+        field on the base show detail, so there's no standalone
+        "created_by endpoint" payload to hand in on its own:
+          Movies  → detail with an appended "credits" key
+                    (append_to_response=credits).
+          TV      → detail with created_by (native on the base /tv/{id}
+                    response) and an appended "aggregate_credits" key
+                    (append_to_response=aggregate_credits).
         """
         if media_type == "movie":
-            try:
-                data = self._get(f"/movie/{tmdb_id}/credits")
-            except Exception as exc:
-                print(f"[TMDB] Could not fetch credits for movie/{tmdb_id}: {exc}")
-                return {"directors": [], "writers": [], "cast": [], "created_by": [], "producers": []}
+            if data is not None:
+                movie_credits = data.get("credits", {})
+            else:
+                try:
+                    movie_credits = self._get(f"/movie/{tmdb_id}/credits")
+                except Exception as exc:
+                    print(f"[TMDB] Could not fetch credits for movie/{tmdb_id}: {exc}")
+                    return {"directors": [], "writers": [], "cast": [], "created_by": [], "producers": []}
 
-            crew = data.get("crew", [])
+            crew = movie_credits.get("crew", [])
 
             directors = [
                 {"name": m["name"]}
@@ -1223,7 +1238,7 @@ class TmdbClient:
                     seen_writer.add(w["name"])
                     writers.append(w)
 
-            cast_raw = data.get("cast", [])
+            cast_raw = movie_credits.get("cast", [])
             cast = [
                 {"name": m.get("name", ""), "character": m.get("character", ""), "order": m.get("order")}
                 for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
@@ -1233,30 +1248,40 @@ class TmdbClient:
             return {"directors": directors, "writers": writers, "cast": cast, "created_by": [], "producers": producers}
 
         else:
-            # TV: fetch show detail for created_by, then aggregate_credits for cast + crew
             created_by: list[dict] = []
-            try:
-                detail = self._get(f"/tv/{tmdb_id}")
+            agg: dict = {}
+
+            if data is not None:
                 created_by = [
                     {"name": p["name"]}
-                    for p in detail.get("created_by", [])
+                    for p in data.get("created_by", [])
                     if p.get("name")
                 ]
-            except Exception as exc:
-                print(f"[TMDB] Could not fetch TV detail for {tmdb_id}: {exc}")
+                agg = data.get("aggregate_credits", {})
+            else:
+                # TV: fetch show detail for created_by, then aggregate_credits for cast + crew
+                try:
+                    detail = self._get(f"/tv/{tmdb_id}")
+                    created_by = [
+                        {"name": p["name"]}
+                        for p in detail.get("created_by", [])
+                        if p.get("name")
+                    ]
+                except Exception as exc:
+                    print(f"[TMDB] Could not fetch TV detail for {tmdb_id}: {exc}")
 
-            cast: list[dict] = []
-            producers: list[dict] = []
-            try:
-                agg = self._get(f"/tv/{tmdb_id}/aggregate_credits")
-                cast_raw = agg.get("cast", [])
-                cast = [
-                    {"name": m.get("name", ""), "character": m.get("character", ""), "order": m.get("order")}
-                    for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
-                ][:20]
-                producers = _extract_producers(agg.get("crew", []))
-            except Exception as exc:
-                print(f"[TMDB] Could not fetch aggregate_credits for tv/{tmdb_id}: {exc}")
+                try:
+                    agg = self._get(f"/tv/{tmdb_id}/aggregate_credits")
+                except Exception as exc:
+                    print(f"[TMDB] Could not fetch aggregate_credits for tv/{tmdb_id}: {exc}")
+                    agg = {}
+
+            cast_raw = agg.get("cast", [])
+            cast = [
+                {"name": m.get("name", ""), "character": m.get("character", ""), "order": m.get("order")}
+                for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
+            ][:20]
+            producers = _extract_producers(agg.get("crew", []))
 
             return {"directors": [], "writers": [], "cast": cast, "created_by": created_by, "producers": producers}
 
@@ -1301,9 +1326,10 @@ class TmdbClient:
                   first release_date entry with a non-empty certification.
         TV      → /tv/{id}/content_ratings: find iso_3166_1=='US', take rating.
 
-        For movies, pass a pre-fetched /movie/{id}/release_dates payload via
-        *data* to avoid a second request when the caller already has one
-        (see get_movie_release_dates).
+        Pass a pre-fetched payload via *data* to avoid a second request when
+        the caller already has one — the movie's /release_dates response
+        (see get_movie_release_dates) or the TV show's /content_ratings
+        response, matching whichever endpoint *media_type* would hit.
         """
         try:
             if media_type == "movie":
@@ -1316,7 +1342,8 @@ class TmdbClient:
                             if cert:
                                 return cert
             else:
-                data = self._get(f"/tv/{tmdb_id}/content_ratings")
+                if data is None:
+                    data = self._get(f"/tv/{tmdb_id}/content_ratings")
                 for country in data.get("results", []):
                     if country.get("iso_3166_1") == "US":
                         rating = country.get("rating", "").strip()
@@ -1363,7 +1390,7 @@ class TmdbClient:
         us_release_date = min(us_dates) if us_dates else None
         return release_date, us_release_date
 
-    def get_watch_providers(self, tmdb_id: int, media_type: str) -> dict[str, list[str]]:
+    def get_watch_providers(self, tmdb_id: int, media_type: str, data: dict | None = None) -> dict[str, list[str]]:
         """
         Return US watch providers for a title from
         /movie|tv/{id}/watch/providers.
@@ -1372,12 +1399,17 @@ class TmdbClient:
         'buy', each mapping to a list of provider_name strings. A missing
         category in the API response returns an empty list for that key.
         Returns all-empty lists when there is no US entry or on error.
+
+        Pass a pre-fetched /movie|tv/{id}/watch/providers payload via *data*
+        to avoid a second request when the caller already has one (e.g. via
+        append_to_response=watch/providers on the detail call).
         """
-        try:
-            data = self._get(f"/{media_type}/{tmdb_id}/watch/providers")
-        except Exception as exc:
-            print(f"[TMDB] Could not fetch watch providers for {media_type}/{tmdb_id}: {exc}")
-            return {"flatrate": [], "rent": [], "buy": []}
+        if data is None:
+            try:
+                data = self._get(f"/{media_type}/{tmdb_id}/watch/providers")
+            except Exception as exc:
+                print(f"[TMDB] Could not fetch watch providers for {media_type}/{tmdb_id}: {exc}")
+                return {"flatrate": [], "rent": [], "buy": []}
 
         us = data.get("results", {}).get("US") or {}
 
@@ -1386,17 +1418,22 @@ class TmdbClient:
             for kind in ("flatrate", "rent", "buy")
         }
 
-    def get_title_logo(self, tmdb_id: int, media_type: str) -> str | None:
+    def get_title_logo(self, tmdb_id: int, media_type: str, data: dict | None = None) -> str | None:
         """
         Return a full image URL for the title's logo, preferring English.
         Falls back to the first logo in any language if no English logo exists.
         Returns None if no logos are available.
+
+        Pass a pre-fetched /movie|tv/{id}/images payload via *data* to avoid
+        a second request when the caller already has one (e.g. via
+        append_to_response=images on the detail call).
         """
-        try:
-            data = self._get(f"/{media_type}/{tmdb_id}/images")
-        except Exception as exc:
-            print(f"[TMDB] Could not fetch images for {media_type}/{tmdb_id}: {exc}")
-            return None
+        if data is None:
+            try:
+                data = self._get(f"/{media_type}/{tmdb_id}/images")
+            except Exception as exc:
+                print(f"[TMDB] Could not fetch images for {media_type}/{tmdb_id}: {exc}")
+                return None
 
         logos = data.get("logos", [])
         if not logos:
@@ -1407,13 +1444,20 @@ class TmdbClient:
         file_path = chosen.get("file_path", "")
         return f"{POSTER_BASE}{file_path}" if file_path else None
 
-    def get_videos(self, tmdb_id: int, media_type: str) -> list[dict]:
-        """Return official YouTube trailers and teasers for a title from TMDB."""
-        try:
-            data = self._get(f"/{media_type}/{tmdb_id}/videos")
-        except Exception as exc:
-            print(f"[TMDB] Could not fetch videos for {media_type}/{tmdb_id}: {exc}")
-            return []
+    def get_videos(self, tmdb_id: int, media_type: str, data: dict | None = None) -> list[dict]:
+        """
+        Return official YouTube trailers and teasers for a title from TMDB.
+
+        Pass a pre-fetched /movie|tv/{id}/videos payload via *data* to avoid
+        a second request when the caller already has one (e.g. via
+        append_to_response=videos on the detail call).
+        """
+        if data is None:
+            try:
+                data = self._get(f"/{media_type}/{tmdb_id}/videos")
+            except Exception as exc:
+                print(f"[TMDB] Could not fetch videos for {media_type}/{tmdb_id}: {exc}")
+                return []
 
         return [
             v for v in data.get("results", [])

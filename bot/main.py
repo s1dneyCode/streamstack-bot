@@ -199,7 +199,7 @@ def main() -> None:
         tmdb_id    = item["tmdb_id"]
         media_type = item["media_type"]
 
-        # --- Fetch full detail from TMDB --------------------------------
+        # --- Fetch full detail from TMDB, sub-resources appended in one call
         is_limited_series = None
         status            = None
         runtime           = item.get("runtime")
@@ -209,40 +209,54 @@ def main() -> None:
         genres            = [g for g in item.get("genre", "").split(", ") if g]
         release_date      = item.get("release_date")
         us_release_date   = None
-        release_dates_data = None
+
+        # Fed to get_certification() below — for movies this is the same
+        # /release_dates payload get_movie_release_dates() also parses; for
+        # TV it's /content_ratings. Defaults to {} (not None) so a total
+        # fetch failure still short-circuits the downstream helpers instead
+        # of triggering a second, separately-failing request.
+        certification_data   = {}
+        images_data           = {}
+        watch_providers_data  = {}
 
         if media_type == "tv":
             try:
-                detail = tmdb._get(f"/tv/{tmdb_id}")
+                detail = tmdb._get(
+                    f"/tv/{tmdb_id}",
+                    params={"append_to_response": "content_ratings,images,watch/providers"},
+                )
                 is_limited_series = detail.get("type") == "Miniseries"
                 status            = detail.get("status")
                 vote_count        = detail.get("vote_count")
                 original_language = detail.get("original_language")
                 is_documentary    = 99 in [g["id"] for g in detail.get("genres", [])]
                 genres            = [g["name"] for g in detail.get("genres", []) if g.get("name")]
+                certification_data  = detail.get("content_ratings", {})
+                images_data          = detail.get("images", {})
+                watch_providers_data = detail.get("watch/providers", {})
             except Exception:
                 pass
         else:
             try:
-                detail = tmdb._get(f"/movie/{tmdb_id}")
+                detail = tmdb._get(
+                    f"/movie/{tmdb_id}",
+                    params={"append_to_response": "release_dates,images,watch/providers"},
+                )
                 status            = detail.get("status")
                 runtime           = detail.get("runtime")
                 vote_count        = detail.get("vote_count")
                 original_language = detail.get("original_language")
                 is_documentary    = 99 in [g["id"] for g in detail.get("genres", [])]
                 genres            = [g["name"] for g in detail.get("genres", []) if g.get("name")]
+                certification_data  = detail.get("release_dates", {})
+                images_data          = detail.get("images", {})
+                watch_providers_data = detail.get("watch/providers", {})
+
+                worldwide_date, us_release_date = tmdb.get_movie_release_dates(tmdb_id=tmdb_id, data=certification_data)
+                if worldwide_date:
+                    release_date = worldwide_date
             except Exception:
                 pass
-
-            try:
-                release_dates_data = tmdb._get(f"/movie/{tmdb_id}/release_dates")
-            except Exception as exc:
-                print(f"[TMDB] Could not fetch release dates for movie/{tmdb_id}: {exc}")
-                release_dates_data = {}
-
-            worldwide_date, us_release_date = tmdb.get_movie_release_dates(tmdb_id=tmdb_id, data=release_dates_data)
-            if worldwide_date:
-                release_date = worldwide_date
 
         # --- Runtime filter: skip short films ---------------------------
         if media_type == "movie" and runtime is not None and runtime < 40:
@@ -254,8 +268,8 @@ def main() -> None:
             print(f"[BOT] Skipping {title}: original_language={original_language} (language filter)")
             continue
 
-        # --- Watch providers via TMDB watch/providers --------------------
-        watch_providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+        # --- Watch providers (from the appended detail payload above) ----
+        watch_providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type, data=watch_providers_data)
         watch_providers = {
             kind: [p for p in names if p in ALLOWED_PROVIDERS]
             for kind, names in watch_providers.items()
@@ -276,8 +290,8 @@ def main() -> None:
             "popularity":   item.get("popularity", 0.0),
             "imdb_id":      item.get("imdb_id"),
             "runtime":      runtime,
-            "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type),
-            "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type, data=release_dates_data),
+            "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type, data=images_data),
+            "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type, data=certification_data),
             "genres":         genres,
             "vote_count":     vote_count,
             "tmdb_score":     item.get("tmdb_score", 0),
