@@ -32,12 +32,15 @@ Expected schema (create once in the Supabase dashboard / migrations):
 """
 
 import math
+import os
 from datetime import date, datetime, timedelta, timezone
 
 from supabase import create_client, Client
 
 _BAYES_M = 500    # minimum votes threshold
 _BAYES_C = 72.07  # global mean score
+
+_DEFAULT_REVERIFY_LIMIT = 3000
 
 _PRE_RELEASE_STATUSES = frozenset({'In Production', 'Post Production', 'Planned', 'Rumored'})
 
@@ -469,7 +472,7 @@ class SupabaseClient:
     # Read operations
     # ------------------------------------------------------------------
 
-    def get_titles_to_reverify(self, today: date) -> list[dict]:
+    def get_titles_to_reverify(self, today: date, limit: int | None = None) -> list[dict]:
         """
         Return titles whose streaming availability should be re-checked today.
 
@@ -485,8 +488,22 @@ class SupabaseClient:
           - TV released ≤ 30 days ago, not streamable               — every 3 days
           - TV released 30-90 days ago, not streamable              — every 7 days
           - TV released > 90 days ago, not streamable               — every 7 days
+
+        Bounded to *limit* titles total (defaults to the REVERIFY_LIMIT env
+        var if set, else _DEFAULT_REVERIFY_LIMIT). Every bucket query is
+        ordered by streaming_last_checked ascending (nulls/never-checked
+        first) and capped at *limit* server-side, so a bucket that exceeds
+        Supabase's implicit page size can't silently drop its stalest rows
+        in favor of arbitrary ones. After merging, the combined set is
+        re-sorted the same way and truncated to *limit* — the titles that
+        miss the cut are simply the freshest-checked ones, which wait one
+        more day; nothing is lost, and this keeps nightly runtime from
+        growing unbounded as the catalog grows.
         """
-        cols = "id, tmdb_id, title, media_type, release_date, is_in_theatres, status"
+        if limit is None:
+            limit = int(os.environ.get("REVERIFY_LIMIT", _DEFAULT_REVERIFY_LIMIT))
+
+        cols = "id, tmdb_id, title, media_type, release_date, is_in_theatres, status, streaming_last_checked"
         today_str        = today.isoformat()
         three_days_ago   = (today - timedelta(days=3)).isoformat()
         seven_days_ago   = (today - timedelta(days=7)).isoformat()
@@ -509,6 +526,8 @@ class SupabaseClient:
             _add((self.client.table("media").select(cols)
                 .gt("release_date", today_str)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
             # In Theatres, recent release — stale after 7 days
@@ -517,6 +536,8 @@ class SupabaseClient:
                 .lte("release_date", today_str)
                 .gte("release_date", sixty_days_ago)
                 .lt("streaming_last_checked", seven_days_ago)
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
             # In Theatres, older release — stale after 7 days
@@ -524,12 +545,16 @@ class SupabaseClient:
                 .eq("is_in_theatres", True)
                 .lt("release_date", sixty_days_ago)
                 .lt("streaming_last_checked", seven_days_ago)
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
             # Streamable titles — stale after 7 days
             _add((self.client.table("media").select(cols)
                 .eq("is_streamable_now", True)
                 .lt("streaming_last_checked", seven_days_ago)
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
             # Recent titles (90-365d ago) — critical streaming window, stale after 7 days
@@ -537,12 +562,16 @@ class SupabaseClient:
                 .lt("release_date", ninety_days_ago)
                 .gte("release_date", one_year_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
             # Old titles (> 365d ago) — stale after 90 days
             _add((self.client.table("media").select(cols)
                 .lt("release_date", one_year_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{ninety_days_ago}")
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
             # TV: released in last 30 days, not yet streamable — stale after 3 days
@@ -552,6 +581,8 @@ class SupabaseClient:
                 .lte("release_date", today_str)
                 .gte("release_date", thirty_days_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{three_days_ago}")
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
             # TV: released 30-90 days ago, not yet streamable — stale after 7 days
@@ -561,6 +592,8 @@ class SupabaseClient:
                 .lt("release_date", thirty_days_ago)
                 .gte("release_date", ninety_days_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
             # TV: older than 90 days, not yet streamable — stale after 7 days
@@ -569,10 +602,20 @@ class SupabaseClient:
                 .eq("is_streamable_now", False)
                 .lt("release_date", ninety_days_ago)
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .order("streaming_last_checked", desc=False, nullsfirst=True)
+                .limit(limit)
                 .execute()).data or [])
 
         except Exception as exc:
             print(f"[Supabase] Error fetching titles to reverify: {exc}")
+
+        # Global re-sort across all buckets (each was only locally sorted),
+        # nulls/never-checked first, then cap — the titles cut here are
+        # simply the freshest-checked, which wait one more day.
+        results.sort(key=lambda r: r.get("streaming_last_checked") or "")
+        if len(results) > limit:
+            print(f"[Supabase] {len(results)} titles stale, capping to the {limit} oldest-checked tonight.")
+            results = results[:limit]
 
         print(f"[Supabase] {len(results)} titles queued for re-verification.")
         return results

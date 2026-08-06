@@ -10,6 +10,7 @@ Orchestrates the nightly pipeline:
 
 Run locally (requires env vars to be set in the shell):
     python bot/main.py
+    python bot/main.py --limit=1000   # cap Steps 10/10b/11's re-verify set
 
 In production this file is invoked by the GitHub Actions nightly workflow
 (.github/workflows/nightly.yml) which injects secrets as environment variables.
@@ -63,6 +64,15 @@ def main() -> None:
     # Initialisation                                                       #
     # ------------------------------------------------------------------ #
     print("[BOT] Starting StreamStack nightly bot...")
+
+    # Caps Steps 10/10b/11's re-verify set; falls through to the
+    # REVERIFY_LIMIT env var (then a hardcoded default) when not passed —
+    # see SupabaseClient.get_titles_to_reverify().
+    reverify_limit = None
+    for arg in sys.argv[1:]:
+        if arg.startswith("--limit="):
+            reverify_limit = int(arg.split("=")[1])
+
     config = load_env()
 
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
@@ -312,7 +322,7 @@ def main() -> None:
 
     # Load reverify list for Steps 10, 10b and 11
     today = date.today()
-    reverify_list = db.get_titles_to_reverify(today)
+    reverify_list = db.get_titles_to_reverify(today, limit=reverify_limit)
     print(f"\n[BOT] {len(reverify_list)} titles queued for periodic re-verification.")
 
     # ------------------------------------------------------------------ #
