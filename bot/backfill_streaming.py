@@ -82,6 +82,7 @@ def main() -> None:
     total     = len(all_media)
     updated   = 0
     streamable_count = 0
+    errors    = 0
 
     for i, row in enumerate(all_media, start=1):
         media_id   = row["id"]
@@ -89,29 +90,34 @@ def main() -> None:
         title      = row["title"]
         media_type = row["media_type"]
 
-        providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
-        providers = {
-            region: {kind: [p for p in names if p in ALLOWED_PROVIDERS] for kind, names in kinds.items()}
-            for region, kinds in providers.items()
-        }
+        try:
+            providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type)
+            providers = {
+                region: {kind: [p for p in names if p in ALLOWED_PROVIDERS] for kind, names in kinds.items()}
+                for region, kinds in providers.items()
+            }
 
-        if any(names for kinds in providers.values() for names in kinds.values()):
-            is_streamable = bool(providers.get("US", {}).get("flatrate"))
-            db.sync_streaming_providers(media_id=media_id, providers=providers)
-            db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
-            updated += 1
-            if is_streamable:
-                streamable_count += 1
-            print(f"[BACKFILL] {i}/{total} {title}: {providers}")
-        else:
-            print(f"[BACKFILL] {i}/{total} {title}: no providers found")
+            if any(names for kinds in providers.values() for names in kinds.values()):
+                is_streamable = bool(providers.get("US", {}).get("flatrate"))
+                db.sync_streaming_providers(media_id=media_id, providers=providers)
+                db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
+                updated += 1
+                if is_streamable:
+                    streamable_count += 1
+                print(f"[BACKFILL] {i}/{total} {title}: {providers}")
+            else:
+                print(f"[BACKFILL] {i}/{total} {title}: no providers found")
 
-        db.update_streaming_last_checked(media_id)
-        time.sleep(0.25)
+            db.update_streaming_last_checked(media_id)
+        except Exception as exc:
+            errors += 1
+            print(f"[BACKFILL] {i}/{total} {title}: FAILED — {exc} (will retry next run)")
+        finally:
+            time.sleep(0.25)
 
     print(
         f"\n[BACKFILL] Done. {updated}/{total} titles had provider data, "
-        f"{streamable_count} flagged streamable now."
+        f"{streamable_count} flagged streamable now, {errors} errors."
     )
 
 
