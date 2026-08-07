@@ -1,0 +1,32 @@
+name: Streaming Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_titles:
+        description: 'Max titles this run (blank = all; use e.g. 300 for a verification run). Script is resumable.'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  streaming-backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run streaming backfill
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          MAX_TITLES: ${{ github.event.inputs.max_titles }}
+        run: python -m bot.backfill_streaming

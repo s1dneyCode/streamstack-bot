@@ -73,6 +73,12 @@ def main() -> None:
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
     all_media = fetch_all_media(db)
+
+    max_titles = os.environ.get("MAX_TITLES")
+    if max_titles:
+        all_media = all_media[:int(max_titles)]
+        print(f"[BACKFILL] MAX_TITLES set — limiting this run to {len(all_media)} titles.")
+
     total     = len(all_media)
     updated   = 0
     streamable_count = 0
