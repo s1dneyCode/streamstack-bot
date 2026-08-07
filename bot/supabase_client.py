@@ -753,20 +753,40 @@ class SupabaseClient:
         Return up to *limit* media rows (id, tmdb_id, media_type) where
         trakt_related_synced_at IS NULL, ordered by popularity desc — the
         state-driven drain queue for sync_trakt.py's related-titles phase.
-        Mirrors enrich_new_titles.py's enriched_at IS NULL scan, including
-        the tmdb_missing_at exclusion so a soft-flagged-dead title isn't
-        drained forever.
+
+        NOTE: PostgREST caps any single response at ~1000 rows regardless of
+        the .limit() requested, so a plain .limit(4000) silently returns only
+        1000 (the reason a bumped TRAKT_RELATED_BATCH appeared to do nothing).
+        Page through with .range() in <=1000-row chunks until *limit* rows are
+        collected or the NULL queue is exhausted. Safe because this method only
+        reads — the drain loop stamps trakt_related_synced_at afterward — so
+        the filtered set is stable across pages within one call. The secondary
+        .order("id") makes the page boundaries deterministic under popularity
+        ties/nulls.
         """
-        return (
-            self.client.table("media")
-            .select("id, tmdb_id, media_type")
-            .is_("trakt_related_synced_at", "null")
-            .is_("tmdb_missing_at", "null")
-            .order("popularity", desc=True)
-            .limit(limit)
-            .execute()
-            .data or []
-        )
+        PAGE = 1000
+        rows: list[dict] = []
+        offset = 0
+        while len(rows) < limit:
+            want = min(PAGE, limit - len(rows))
+            page = (
+                self.client.table("media")
+                .select("id, tmdb_id, media_type")
+                .is_("trakt_related_synced_at", "null")
+                .is_("tmdb_missing_at", "null")
+                .order("popularity", desc=True)
+                .order("id")
+                .range(offset, offset + want - 1)
+                .execute()
+                .data or []
+            )
+            if not page:
+                break
+            rows.extend(page)
+            if len(page) < want:
+                break  # queue exhausted
+            offset += len(page)
+        return rows
 
     def replace_media_related(self, media_id_uuid: str, rows: list[dict], synced_at_iso: str) -> None:
         """
