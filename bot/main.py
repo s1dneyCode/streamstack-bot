@@ -26,6 +26,7 @@ from .tmdb import TmdbClient
 from .omdb import OmdbClient
 from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES, ALLOWED_PROVIDERS
 from .filters import ALLOWED_LANGUAGES
+from .migrate_images import poster_basename, refresh_poster
 
 
 def load_env() -> dict[str, str]:
@@ -193,6 +194,36 @@ def main() -> None:
     new_items = [item for item in combined if item["tmdb_id"] not in existing_ids]
     skipped = len(combined) - len(new_items)
     print(f"[BOT] {len(new_items)} new titles to process, {skipped} already in DB.")
+
+    # ------------------------------------------------------------------ #
+    # Step 8b — Refresh posters for existing titles seen tonight          #
+    # ------------------------------------------------------------------ #
+    # Relies only on poster_path already present in `combined` (from the
+    # list endpoints fetched in Steps 1-7) — no extra TMDB API calls.
+    print("\n[BOT] Step 8b: Refreshing posters for existing titles seen tonight...")
+    existing_items = [item for item in combined if item["tmdb_id"] in existing_ids]
+    poster_state = db.get_media_poster_state_by_tmdb_ids([item["tmdb_id"] for item in existing_items])
+
+    step8b_refreshed = 0
+    step8b_errors    = 0
+    for item in existing_items:
+        tmdb_id = item["tmdb_id"]
+        try:
+            stored = poster_state.get(tmdb_id)
+            if stored is None:
+                continue
+            fresh = item.get("poster_path")
+            if fresh and poster_basename(fresh) != poster_basename(stored.get("poster_path")):
+                if refresh_poster(db, tmdb_id, stored["id"], fresh):
+                    step8b_refreshed += 1
+        except Exception as exc:
+            step8b_errors += 1
+            print(f"[BOT] Step 8b {tmdb_id}: failed — {exc}")
+
+    print(
+        f"[BOT] Step 8b: refreshed {step8b_refreshed} poster(s) of "
+        f"{len(existing_items)} existing titles seen tonight ({step8b_errors} errors)."
+    )
 
     # ------------------------------------------------------------------ #
     # Step 9 — Enrich and persist each NEW title                          #

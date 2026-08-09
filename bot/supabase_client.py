@@ -661,6 +661,37 @@ class SupabaseClient:
                 mapping[row["tmdb_id"]] = row["id"]
         return mapping
 
+    def get_media_poster_state_by_tmdb_ids(self, tmdb_ids: list[int]) -> dict[int, dict]:
+        """
+        Return {tmdb_id: {"id": media_id, "poster_path": stored_poster_path}}
+        for whichever of *tmdb_ids* already exist in public.media. Used by
+        main.py's Step 8b to detect when TMDB's primary poster has changed
+        for a title already in the catalog, without a second per-title query.
+
+        Chunked at 200 ids per request, same as get_media_ids_by_tmdb_ids
+        above — a 1000-id .in_() list produces an ~8 KB query URL, which can
+        trip the Supabase gateway's header-size limit (414) well before
+        PostgREST's own ~1000-row response cap even comes into play. 200
+        keeps the URL comfortably small.
+        """
+        index: dict[int, dict] = {}
+        chunk_size = 200
+        for i in range(0, len(tmdb_ids), chunk_size):
+            chunk = tmdb_ids[i:i + chunk_size]
+            try:
+                response = (
+                    self.client.table("media")
+                    .select("id, tmdb_id, poster_path")
+                    .in_("tmdb_id", chunk)
+                    .execute()
+                )
+            except Exception as exc:
+                print(f"[Supabase] Error looking up poster state for a chunk of tmdb_ids: {exc}")
+                continue
+            for row in response.data or []:
+                index[row["tmdb_id"]] = {"id": row["id"], "poster_path": row.get("poster_path")}
+        return index
+
     def set_tmdb_missing(self, media_id: int) -> None:
         """
         Stamp tmdb_missing_at = now() on the media row — soft-flag a title

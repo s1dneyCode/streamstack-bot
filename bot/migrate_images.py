@@ -17,6 +17,7 @@ from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
 
 BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
+POSTER_BASE   = "https://image.tmdb.org/t/p/w500"
 BUCKET = "media-images"
 
 
@@ -40,6 +41,90 @@ def download_image(url: str) -> bytes | None:
     except Exception as exc:
         print(f"[MIGRATE] Warning: failed to download {url}: {exc}")
         return None
+
+
+def poster_basename(path: str) -> str:
+    """
+    Return just the TMDB image filename from either a full URL
+    (https://image.tmdb.org/t/p/w500/abc.jpg) or a raw path (/abc.jpg).
+    Empty string for falsy input.
+    """
+    if not path:
+        return ""
+    return path.rsplit("/", 1)[-1]
+
+
+def _full_image_url(path: str) -> str:
+    """
+    Build an absolute TMDB image URL from *path*.
+
+    *path* is normally a relative TMDB path (e.g. "/abc123.jpg"), but some
+    callers (e.g. media.poster_path, already normalized by tmdb.py's list
+    endpoints) pass an already-absolute URL. Prepending POSTER_BASE in that
+    case would produce a malformed double-prefixed URL, so this is a no-op
+    when *path* is already absolute.
+
+    Duplicated from enrich_new_titles.py rather than imported — that module
+    is left untouched so its own first-time-hosting behavior can't be
+    affected by this refresh path.
+    """
+    if not path:
+        return ""
+    if path.startswith("https://") or path.startswith("http://"):
+        return path
+    return f"{POSTER_BASE}{path}"
+
+
+def refresh_poster(db: SupabaseClient, tmdb_id: int, media_id, fresh_tmdb_poster: str) -> str | None:
+    """
+    Re-host a title's poster at a versioned storage path when TMDB's
+    primary poster has changed, so poster_url points at a new URL and the
+    app's cached_network_image re-fetches automatically (same URL forever
+    would just serve the stale cached image).
+
+    *fresh_tmdb_poster* may be a raw TMDB path or an already-absolute URL.
+    On any failure (download, upload, or DB write) returns None and never
+    touches the DB — an existing poster_url is never nulled out just
+    because a refresh attempt failed.
+
+    On success, updates BOTH poster_url (new hosted URL) and poster_path
+    (the normalized full TMDB URL) — storing the normalized form here means
+    future poster_basename() comparisons stay stable regardless of how a
+    given row's poster_path was originally populated (bare-row inserts from
+    sync_changes.py/coverage_sweep.py store TMDB's raw relative path;
+    main.py/bulk_import.py store an already-absolute URL).
+
+    Uploads to posters/{tmdb_id}/{stem}.jpg (stem = poster_basename without
+    its extension) rather than migrate_poster()'s flat posters/{tmdb_id}.jpg
+    — a versioned path per TMDB filename, so a poster TMDB reverts to that
+    we've already hosted re-uses the same object (upload_image always
+    upserts) instead of colliding with whatever's currently live.
+    """
+    full_url = _full_image_url(fresh_tmdb_poster)
+    if not full_url:
+        return None
+
+    image_bytes = download_image(full_url)
+    if not image_bytes:
+        return None
+
+    stem = poster_basename(fresh_tmdb_poster).rsplit(".", 1)[0]
+    if not stem:
+        return None
+
+    url = db.upload_image(BUCKET, f"posters/{tmdb_id}/{stem}.jpg", image_bytes)
+    if not url:
+        return None
+
+    try:
+        db.client.table("media").update(
+            {"poster_url": url, "poster_path": full_url}
+        ).eq("id", media_id).execute()
+    except Exception as exc:
+        print(f"[MIGRATE] Warning: failed to update poster_url/poster_path for tmdb_id={tmdb_id}: {exc}")
+        return None
+
+    return url
 
 
 def migrate_poster(db: SupabaseClient, tmdb_id: int, title: str, poster_path: str) -> str | None:
