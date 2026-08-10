@@ -1292,7 +1292,7 @@ class TmdbClient:
             crew = movie_credits.get("crew", [])
 
             directors = [
-                {"name": m["name"]}
+                {"name": m["name"], "profile_path": m.get("profile_path")}
                 for m in crew
                 if m.get("job") == "Director"
             ]
@@ -1312,7 +1312,12 @@ class TmdbClient:
 
             cast_raw = movie_credits.get("cast", [])
             cast = [
-                {"name": m.get("name", ""), "character": m.get("character", ""), "order": m.get("order")}
+                {
+                    "name": m.get("name", ""),
+                    "character": m.get("character", ""),
+                    "order": m.get("order"),
+                    "profile_path": m.get("profile_path"),
+                }
                 for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
             ][:20]
 
@@ -1325,7 +1330,7 @@ class TmdbClient:
 
             if data is not None:
                 created_by = [
-                    {"name": p["name"]}
+                    {"name": p["name"], "profile_path": p.get("profile_path")}
                     for p in data.get("created_by", [])
                     if p.get("name")
                 ]
@@ -1335,7 +1340,7 @@ class TmdbClient:
                 try:
                     detail = self._get(f"/tv/{tmdb_id}")
                     created_by = [
-                        {"name": p["name"]}
+                        {"name": p["name"], "profile_path": p.get("profile_path")}
                         for p in detail.get("created_by", [])
                         if p.get("name")
                     ]
@@ -1350,7 +1355,12 @@ class TmdbClient:
 
             cast_raw = agg.get("cast", [])
             cast = [
-                {"name": m.get("name", ""), "character": m.get("character", ""), "order": m.get("order")}
+                {
+                    "name": m.get("name", ""),
+                    "character": m.get("character", ""),
+                    "order": m.get("order"),
+                    "profile_path": m.get("profile_path"),
+                }
                 for m in sorted(cast_raw, key=lambda x: x.get("order", 9999))
             ][:20]
             producers = _extract_producers(agg.get("crew", []))

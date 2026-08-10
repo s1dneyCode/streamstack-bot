@@ -522,22 +522,27 @@ class SupabaseClient:
         Returns total rows upserted. Raises on failure — never returns 0 to
         mean "failed silently."
         """
+        # profile_path is carried for the roles TMDB actually gives headshots
+        # for (cast, director, created_by); writers/producers are stored with
+        # None. Since it's a plain value column and the conflict key stays
+        # (media_id, name, role), re-upserting an existing person UPDATES
+        # their profile_path rather than inserting a duplicate row.
         rows: list[dict] = []
 
         for p in directors:
-            rows.append({"media_id": media_id, "name": p["name"], "role": "director", "order": None, "character": None})
+            rows.append({"media_id": media_id, "name": p["name"], "role": "director", "order": None, "character": None, "profile_path": p.get("profile_path")})
 
         for i, p in enumerate(writers):
-            rows.append({"media_id": media_id, "name": p["name"], "role": "writer", "order": p.get("order", i + 1), "character": None})
+            rows.append({"media_id": media_id, "name": p["name"], "role": "writer", "order": p.get("order", i + 1), "character": None, "profile_path": None})
 
         for p in cast:
-            rows.append({"media_id": media_id, "name": p["name"], "role": "cast", "order": p.get("order"), "character": p.get("character", "")})
+            rows.append({"media_id": media_id, "name": p["name"], "role": "cast", "order": p.get("order"), "character": p.get("character", ""), "profile_path": p.get("profile_path")})
 
         for p in (created_by or []):
-            rows.append({"media_id": media_id, "name": p["name"], "role": "created_by", "order": None, "character": None})
+            rows.append({"media_id": media_id, "name": p["name"], "role": "created_by", "order": None, "character": None, "profile_path": p.get("profile_path")})
 
         for p in (producers or []):
-            rows.append({"media_id": media_id, "name": p["name"], "role": "producer", "order": None, "character": None})
+            rows.append({"media_id": media_id, "name": p["name"], "role": "producer", "order": None, "character": None, "profile_path": None})
 
         if not rows:
             return 0
