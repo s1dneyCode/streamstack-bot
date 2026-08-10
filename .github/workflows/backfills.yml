@@ -30,6 +30,7 @@ on:
           - season-ratings
           - release-dates
           - credits-order
+          - cast-photos
       role:
         description: 'Credits role filter (optional, e.g. producer). Only used when job == credits.'
         required: false
@@ -440,3 +441,21 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_release_dates
+
+  backfill-cast-photos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    if: github.event.inputs.job == 'cast-photos'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill cast photos
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_cast_photos
