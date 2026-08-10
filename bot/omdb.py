@@ -5,11 +5,16 @@ OMDb aggregates metadata from multiple sources, including Rotten Tomatoes
 critic scores.  We use it solely for that RT score; TMDB is our source of
 truth for everything else.
 
-Free tier is limited to 1 000 requests/day.
+This account is on OMDb's PAID tier: 100,000 requests/day, not the free
+tier's 1,000. daily_quota below is therefore a per-process runaway-loop
+backstop rather than a scarce-resource ration — see the comment on
+DEFAULT_DAILY_QUOTA for why per-process is sufficient here and where it
+doesn't hold. Overridable via the OMDB_DAILY_QUOTA env var.
 
 Reference: https://www.omdbapi.com/
 """
 
+import os
 import requests
 import re
 
@@ -20,21 +25,39 @@ OMDB_BASE = "http://www.omdbapi.com/"
 # Conservative throttle — OMDb doesn't publish a documented per-second cap.
 OMDB_RATE_LIMIT = 5.0  # requests/second
 
-# Stay under the free tier's hard 1,000/day wall. This counts requests made
-# by *this process* only — each script run is a separate OmdbClient
-# instance, so it can't see usage from another run earlier today. That's
-# an acceptable gap: it still catches the case that actually causes
-# quota-exhaustion-labeled-as-not-found (a single run burning through the
-# budget on its own re-verify batch), just not cross-process totals.
-DEFAULT_DAILY_QUOTA = 950
+# Runaway-loop backstop, NOT quota rationing — the paid tier's real ceiling
+# is 100,000/day.
+#
+# Two entry points call OMDb: the nightly (bot/main.py, on cron) and the
+# manual RT backfill (bot/backfill_rt_scores.py, workflow_dispatch-only, no
+# cron). Only the nightly is scheduled, so no two OMDb processes run
+# automatically on the same day.
+#
+# This is a PER-PROCESS backstop, not a cross-process guarantee: manually
+# triggering the backfill on the same calendar day as a nightly gives each
+# process its own budget (up to 2x90k against the 100k real ceiling). Not a
+# risk in practice — total unique RT work is bounded by the ~9k-movie
+# missing-RT backlog, so per-run usage stays well under the cap and a
+# same-day pair stays under 100k. If that changes, lower OMDB_DAILY_QUOTA
+# or add cross-process accounting.
+#
+# Previously 950, sized for the free tier's 1,000/day wall — that throttled
+# the bot to ~1% of available quota and starved Step 11b, since Step 11
+# alone (~600+ movies) could trip the cap before 11b ever ran.
+DEFAULT_DAILY_QUOTA = 90000
 
 
 class OmdbClient:
     """Fetches Rotten Tomatoes scores from the OMDb API."""
 
-    def __init__(self, api_key: str, daily_quota: int = DEFAULT_DAILY_QUOTA) -> None:
+    def __init__(self, api_key: str, daily_quota: int | None = None) -> None:
         self.api_key = api_key
-        self.daily_quota = daily_quota
+        # Precedence: explicit arg (tests can force a value) > env
+        # OMDB_DAILY_QUOTA > DEFAULT_DAILY_QUOTA.
+        self.daily_quota = (
+            daily_quota if daily_quota is not None
+            else int(os.environ.get("OMDB_DAILY_QUOTA", DEFAULT_DAILY_QUOTA))
+        )
         self._requests_made = 0
         self._quota_exhausted = False
         self._limiter = RateLimiter(rate=OMDB_RATE_LIMIT)
