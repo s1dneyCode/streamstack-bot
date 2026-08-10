@@ -249,6 +249,18 @@ def main() -> None:
         release_date      = item.get("release_date")
         us_release_date   = None
 
+        # --- Language filter, pre-fetch ---------------------------------
+        # The discovery row usually already carries original_language, so a
+        # title we'd reject anyway doesn't need its detail call made first.
+        # Only fires on a PRESENT, disallowed value: when discovery omits it
+        # (None) the detail fetch may still reveal an allowed language, so
+        # that case falls through to the post-detail filter below. Same
+        # decision the post-detail filter would make for the same value, so
+        # nothing that would have passed can be skipped here.
+        if original_language is not None and original_language not in ALLOWED_LANGUAGES:
+            print(f"[BOT] Skipping {title}: original_language={original_language} (language filter, pre-fetch)")
+            continue
+
         # Fed to get_certification() below — for movies this is the same
         # /release_dates payload get_movie_release_dates() also parses; for
         # TV it's /content_ratings. Defaults to {} (not None) so a total
@@ -567,6 +579,22 @@ def main() -> None:
 
     # is_in_theatres is now managed by daily_verify.py (runs at 8am UTC)
 
+    # Run-scoped memo for Steps 14/17/17b below. Deliberately NOT wrapped in
+    # its own try/except: on failure the assignment never completes, so the
+    # id stays absent from the cache, the exception propagates to the
+    # calling step's existing per-show handler exactly as a bare
+    # tmdb.get_seasons() would, and a later step re-attempts the fetch. A
+    # successful empty list IS cached — that's the same value each step
+    # would have gotten independently.
+    season_cache: dict[int, list] = {}
+
+    def get_seasons_once(tmdb_id: int) -> list:
+        """Fetch a show's TMDB season list at most once per run. Steps 14/17/17b
+        all need it; a Returning+streamable show otherwise hits /tv/{id} 3×."""
+        if tmdb_id not in season_cache:
+            season_cache[tmdb_id] = tmdb.get_seasons(tmdb_id=tmdb_id)
+        return season_cache[tmdb_id]
+
     # ------------------------------------------------------------------ #
     # Step 14 — Check for new seasons on Returning Series                 #
     # ------------------------------------------------------------------ #
@@ -598,7 +626,7 @@ def main() -> None:
         # exception (e.g. a season TMDB no longer has) must not abort the
         # rest of the run.
         try:
-            tmdb_seasons = tmdb.get_seasons(tmdb_id=tmdb_id)
+            tmdb_seasons = get_seasons_once(tmdb_id)
             if not tmdb_seasons:
                 continue
 
@@ -716,7 +744,7 @@ def main() -> None:
             # sub-resource even though the show itself is still valid, per
             # TMDB's own current listing rather than blindly trusting what
             # we last stored.
-            tmdb_seasons = tmdb.get_seasons(tmdb_id=tmdb_id)
+            tmdb_seasons = get_seasons_once(tmdb_id)
             if not any(s["season_number"] == season_number for s in tmdb_seasons):
                 continue
 
@@ -792,7 +820,7 @@ def main() -> None:
             season_number = latest[0]["season_number"]
             step17b_checked += 1
 
-            tmdb_seasons = tmdb.get_seasons(tmdb_id=tmdb_id)
+            tmdb_seasons = get_seasons_once(tmdb_id)
             tmdb_season = next((s for s in tmdb_seasons if s["season_number"] == season_number), None)
             if not tmdb_season:
                 continue

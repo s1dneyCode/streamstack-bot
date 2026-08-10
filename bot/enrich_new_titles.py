@@ -154,8 +154,15 @@ def main() -> None:
         # A confirmed 404 means TMDB no longer has this title at all; every
         # other step below would 404 too, so flag it and move on instead of
         # burning the remaining API calls finding that out step by step.
+        #
+        # The payload is kept (not discarded) because it already carries
+        # runtime and genres — Steps 7 and 8 reuse it instead of re-fetching
+        # the identical endpoint. Initialized to {} before the try so it is
+        # always defined: on a non-404 failure it stays {} and those steps
+        # fall back to their own fetch, exactly as they did before.
+        base_detail: dict = {}
         try:
-            tmdb._get(f"/{media_type}/{tmdb_id}")
+            base_detail = tmdb._get(f"/{media_type}/{tmdb_id}")
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 404:
                 db.set_tmdb_missing(media_id)
@@ -320,7 +327,9 @@ def main() -> None:
         # ── Step 7: Runtime (movies only) ───────────────────────────────
         if media_type == "movie" and not row.get("runtime"):
             try:
-                detail  = tmdb._get(f"/movie/{tmdb_id}")
+                # Reuse Step 0's payload (same endpoint, already carries
+                # runtime); only re-fetch if Step 0 failed.
+                detail  = base_detail if base_detail else tmdb._get(f"/movie/{tmdb_id}")
                 runtime = detail.get("runtime")
                 if runtime:
                     db.client.table("media").update({"runtime": runtime}).eq("id", media_id).execute()
@@ -334,7 +343,9 @@ def main() -> None:
         # ── Step 8: Genres ──────────────────────────────────────────────
         if not row.get("genres"):
             try:
-                detail_data = tmdb._get(f"/{media_type}/{tmdb_id}")
+                # Reuse Step 0's payload (same endpoint, already carries
+                # genres); only re-fetch if Step 0 failed.
+                detail_data = base_detail if base_detail else tmdb._get(f"/{media_type}/{tmdb_id}")
                 genres = [g["name"] for g in detail_data.get("genres", []) if g.get("name")]
                 if genres:
                     db.client.table("media").update({"genres": genres}).eq("id", media_id).execute()

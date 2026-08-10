@@ -43,13 +43,23 @@ def verify_now_playing(db: SupabaseClient, tmdb: TmdbClient) -> None:
     """Fetch TMDB now_playing (US) and sync is_in_theatres + force status=Released."""
     print("[VERIFY] Check 1: Now playing (theatres)...")
 
+    # media.id values go into the .in_() filter as a URL query string, so
+    # each batch's id list has to stay well under the ~8KB gateway header
+    # limit. media.id is a uuid (36 chars), which percent-encodes to ~45
+    # chars per id once quotes and commas are escaped — so 100 ids is ~4.5KB
+    # (safe) while 200 would be ~9KB (over the line). Deliberately smaller
+    # than the bigint-keyed chunks elsewhere in the codebase for that reason.
+    WRITE_CHUNK = 100
+
     now_playing     = tmdb.get_now_playing_movies(pages=5)
     now_playing_ids = {item["tmdb_id"] for item in now_playing}
     print(f"[VERIFY]   {len(now_playing_ids)} movies currently in theatres (US, TMDB).")
 
-    # Mark/refresh movies confirmed in now_playing, in chunks of BATCH_SIZE ids.
-    marked   = 0
-    id_list  = list(now_playing_ids)
+    # Read in BATCH_SIZE chunks of tmdb_id, accumulating only the ids that
+    # actually need marking; the writes are batched afterwards rather than
+    # issued one round-trip per row.
+    ids_to_mark: list = []
+    id_list = list(now_playing_ids)
     for i in range(0, len(id_list), BATCH_SIZE):
         chunk = id_list[i:i + BATCH_SIZE]
         rows = (
@@ -60,15 +70,19 @@ def verify_now_playing(db: SupabaseClient, tmdb: TmdbClient) -> None:
             .execute()
             .data or []
         )
-        for row in rows:
-            if not row.get("is_in_theatres") or row.get("status") != "Released":
-                db.client.table("media").update({
-                    "is_in_theatres": True,
-                    "status": "Released",
-                }).eq("id", row["id"]).execute()
-                marked += 1
-                if marked % 50 == 0:
-                    print(f"[VERIFY]   progress: {marked} titles marked in theatres/Released")
+        ids_to_mark.extend(
+            r["id"] for r in rows
+            if not r.get("is_in_theatres") or r.get("status") != "Released"
+        )
+
+    # Identical payload for every row, so one update per WRITE_CHUNK ids
+    # instead of one per row.
+    for j in range(0, len(ids_to_mark), WRITE_CHUNK):
+        db.client.table("media").update({
+            "is_in_theatres": True,
+            "status": "Released",
+        }).in_("id", ids_to_mark[j:j + WRITE_CHUNK]).execute()
+    marked = len(ids_to_mark)
 
     # Read the full "currently in theatres" set first, then clear stale flags —
     # avoids the WHERE clause shrinking mid-pagination as rows get updated.
@@ -89,13 +103,13 @@ def verify_now_playing(db: SupabaseClient, tmdb: TmdbClient) -> None:
             break
         offset += BATCH_SIZE
 
-    cleared = 0
-    for row in currently_in_theatres:
-        if row["tmdb_id"] not in now_playing_ids:
-            db.client.table("media").update({"is_in_theatres": False}).eq("id", row["id"]).execute()
-            cleared += 1
-            if cleared % 50 == 0:
-                print(f"[VERIFY]   progress: {cleared} titles cleared from theatres")
+    ids_to_clear = [r["id"] for r in currently_in_theatres
+                    if r["tmdb_id"] not in now_playing_ids]
+    for j in range(0, len(ids_to_clear), WRITE_CHUNK):
+        db.client.table("media").update(
+            {"is_in_theatres": False}
+        ).in_("id", ids_to_clear[j:j + WRITE_CHUNK]).execute()
+    cleared = len(ids_to_clear)
 
     print(f"[VERIFY]   Check 1 done: {marked} marked in theatres/Released, {cleared} cleared.")
 
