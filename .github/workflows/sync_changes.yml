@@ -12,7 +12,15 @@ concurrency:
 jobs:
   sync-changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 180 to match nightly.yml's Step 10, which does the same per-title
+    # appended-detail + provider-sync work over a comparable batch. The
+    # existing-title refresh branch adds ~20-30 min at MAX_EXISTING_REFRESH
+    # =2000 (Supabase round-trips, not TMDB, are the bottleneck), on top of
+    # an uncapped new-candidate loop — 60 was too tight, and a timeout here
+    # is self-amplifying: last_synced_at is only persisted after the refresh
+    # loop, so a killed run leaves the window unadvanced and the next run's
+    # window strictly wider.
+    timeout-minutes: 180
     env:
       PYTHONUNBUFFERED: '1'
     steps:

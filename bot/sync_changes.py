@@ -8,20 +8,35 @@ bot_state), defaulting to 24h if no prior run is recorded. If a run was
 missed and more than TMDB's 14-day max has elapsed, the window is capped at
 14 days — TMDB simply won't report changes further back than that.
 
-Changed ids are batch-checked against the DB first. A noisy /changes day is
-overwhelmingly ids we already have — those are skipped entirely, no detail
-fetch. Only ids NOT already in our DB get a detail fetch:
+Changed ids are batch-checked against the DB first, then split two ways:
+
+  Ids NOT already in our DB — candidates for a bare-row insert:
   - 404 → never existed in our DB and already gone from TMDB. Nothing to do.
   - Passes the shared quality filter → bare-row insert (enriched_at NULL;
     enrich_new_titles.py fills in the rest).
   - Otherwise → skipped (doesn't clear the bar for a bare insert).
 
-TMDB-side deletions of titles we already have are NOT this script's job —
-that's covered elsewhere for free: main.py Step 10 catches a 404 during its
-existing weekly provider re-verify, and enrich_new_titles.py's Step 0 base
-detail check catches it for anything not yet enriched. Between the two,
-every row in the DB eventually gets its liveness checked without sync_changes
-needing to spend a detail-fetch on ids it already has.
+  Ids we ALREADY have — refreshed in place from one appended detail call
+  (append_to_response=watch/providers), capped at MAX_EXISTING_REFRESH
+  (default 2000) per run. This is what keeps a title's mutable fields from
+  freezing at whatever they were on the day it was first ingested:
+  popularity/popularity_score, tmdb_score, vote_count, status, overview,
+  genres (and the derived is_documentary), runtime (movies), plus its
+  streaming providers and is_streamable_now. A 404 here soft-flags
+  tmdb_missing_at.
+
+  Two fields are deliberately NOT touched by the refresh:
+  - release_date, because media.release_date is the earliest *worldwide*
+    date derived from /movie/{id}/release_dates (see main.py Step 9), not
+    the base detail payload's value — writing it through would revert it.
+  - streaming_last_checked, because that column is also the cursor for the
+    RT-score paths and this script has no OMDb client, so stamping it would
+    evict the title from the only paths that can refresh rt_score. Revisit
+    once a separate rt_last_checked cursor exists.
+
+TMDB-side deletions are caught in several places: the refresh branch above,
+main.py's Step 10 weekly provider re-verify, and enrich_new_titles.py's
+Step 0 base detail check for anything not yet enriched.
 
 Run via:
     python -m bot.sync_changes
@@ -30,15 +45,17 @@ Run via:
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from itertools import zip_longest
 
 import requests
 
 from .tmdb import TmdbClient
-from .supabase_client import SupabaseClient
+from .supabase_client import SupabaseClient, compute_popularity_score, ALLOWED_PROVIDERS
 from .filters import passes_sync_quality_filter, build_bare_media_record
 
 DEFAULT_WINDOW_HOURS = 24
 MAX_WINDOW_DAYS = 14
+DEFAULT_MAX_EXISTING_REFRESH = 2000
 
 
 def load_env() -> dict[str, str]:
@@ -115,10 +132,54 @@ def main() -> None:
     checked = len(changed)
     print(f"[CHANGES] {len(movie_ids)} changed movie id(s), {len(tv_ids)} changed tv id(s) — {checked} total.")
 
-    existing_map = db.get_media_ids_by_tmdb_ids([tmdb_id for tmdb_id, _ in changed]) if changed else {}
+    # get_catalog_tmdb_index (rather than get_media_ids_by_tmdb_ids) because
+    # the refresh branch below needs each row's media_type as well as its id —
+    # see the media_type guard there. The new-candidate partition only does a
+    # key-membership test, so it behaves identically either way.
+    existing_map = db.get_catalog_tmdb_index([tmdb_id for tmdb_id, _ in changed]) if changed else {}
     new_candidates = [(tmdb_id, media_type) for tmdb_id, media_type in changed if tmdb_id not in existing_map]
+    existing_candidates = [(tmdb_id, mt) for (tmdb_id, mt) in changed if tmdb_id in existing_map]
     skipped_existing = checked - len(new_candidates)
-    print(f"[CHANGES] {skipped_existing} already in DB — skipped without a detail fetch. {len(new_candidates)} candidate(s) to check.")
+
+    raw_cap = os.environ.get("MAX_EXISTING_REFRESH")
+    try:
+        max_existing_refresh = int(raw_cap) if raw_cap else DEFAULT_MAX_EXISTING_REFRESH
+    except ValueError:
+        print(f"[CHANGES] WARNING: MAX_EXISTING_REFRESH={raw_cap!r} is not an integer — using {DEFAULT_MAX_EXISTING_REFRESH}.")
+        max_existing_refresh = DEFAULT_MAX_EXISTING_REFRESH
+    if max_existing_refresh < 0:
+        # A negative value would become a Python negative slice and refresh
+        # nearly EVERYTHING — the opposite of a cap.
+        print(f"[CHANGES] WARNING: MAX_EXISTING_REFRESH={max_existing_refresh} is negative — using {DEFAULT_MAX_EXISTING_REFRESH}.")
+        max_existing_refresh = DEFAULT_MAX_EXISTING_REFRESH
+
+    # `changed` is built movies-then-tv, so a plain head slice would drop
+    # from the tv tail — deterministically, the same way every run, meaning
+    # no tv title would EVER be refreshed once movie changes alone fill the
+    # cap. Interleave the two so the cap samples both types proportionally.
+    cap_dropped = 0
+    if len(existing_candidates) > max_existing_refresh:
+        movie_side = [c for c in existing_candidates if c[1] == "movie"]
+        tv_side    = [c for c in existing_candidates if c[1] == "tv"]
+        interleaved: list[tuple[int, str]] = []
+        for a, b in zip_longest(movie_side, tv_side):
+            if a is not None:
+                interleaved.append(a)
+            if b is not None:
+                interleaved.append(b)
+        cap_dropped = len(existing_candidates) - max_existing_refresh
+        existing_candidates = interleaved[:max_existing_refresh]
+        print(
+            f"[CHANGES] {cap_dropped} existing changed title(s) over the "
+            f"MAX_EXISTING_REFRESH={max_existing_refresh} cap — NOT refreshed this run "
+            f"(movies/tv interleaved before slicing so neither type is starved; "
+            f"the rest are still picked up by main.py's Step 10 reverify queue)."
+        )
+
+    print(
+        f"[CHANGES] {skipped_existing} already in DB ({len(existing_candidates)} to refresh). "
+        f"{len(new_candidates)} new candidate(s) to check."
+    )
 
     new_inserted = 0
     errors       = 0
@@ -170,6 +231,148 @@ def main() -> None:
             print(f"[CHANGES]   {media_type}/{tmdb_id}: processing failed — {exc}")
             errors += 1
 
+    # ------------------------------------------------------------------ #
+    # Refresh existing changed titles                                     #
+    # ------------------------------------------------------------------ #
+    # One appended detail call per title covers both the mutable scalar
+    # fields and watch/providers — the same shape main.py's merged Step 10
+    # uses. Without this, everything below stays frozen at whatever it was
+    # when the title was first ingested.
+    print(f"\n[CHANGES] Refreshing {len(existing_candidates)} existing changed title(s)...")
+
+    refreshed        = 0
+    refresh_missing  = 0
+    refresh_errors   = 0
+    type_mismatches  = 0
+
+    for tmdb_id, media_type in existing_candidates:
+        entry = existing_map[tmdb_id]
+        media_id = entry["id"]
+
+        # TMDB's movie and tv id spaces are independent, so a numeric
+        # collision is possible and existing_map is keyed by tmdb_id alone.
+        # Refuse to write a movie's payload onto a tv row (or vice versa)
+        # rather than silently corrupting it — this branch WRITES, unlike
+        # the new-candidate partition above which only reads the key.
+        if entry["media_type"] != media_type:
+            type_mismatches += 1
+            continue
+
+        try:
+            detail = tmdb._get(f"/{media_type}/{tmdb_id}", params={"append_to_response": "watch/providers"})
+        except requests.HTTPError as exc:
+            http_status = exc.response.status_code if exc.response is not None else None
+            if http_status == 404:
+                db.set_tmdb_missing(media_id)
+                refresh_missing += 1
+                print(f"[CHANGES]   {media_type}/{tmdb_id}: 404 — removed from TMDB, flagged tmdb_missing_at.")
+                continue
+            print(f"[CHANGES]   {media_type}/{tmdb_id}: refresh fetch failed ({http_status}) — {exc}")
+            refresh_errors += 1
+            continue
+        except Exception as exc:
+            print(f"[CHANGES]   {media_type}/{tmdb_id}: refresh fetch failed — {exc}")
+            refresh_errors += 1
+            continue
+
+        try:
+            raw_providers = detail.get("watch/providers") or {}
+            providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type, data=raw_providers)
+            providers = {
+                region: {kind: [p for p in names if p in ALLOWED_PROVIDERS] for kind, names in kinds.items()}
+                for region, kinds in providers.items()
+            }
+
+            has_providers = any(names for kinds in providers.values() for names in kinds.values())
+            if has_providers:
+                is_streamable = bool(providers.get("US", {}).get("flatrate"))
+                db.sync_streaming_providers(media_id=media_id, providers=providers)
+
+            popularity   = detail.get("popularity")
+            tmdb_score   = round((detail.get("vote_average") or 0) * 10)
+            vote_count   = detail.get("vote_count")
+            status       = detail.get("status")
+            overview     = detail.get("overview")
+            genres       = [g["name"] for g in detail.get("genres", []) if g.get("name")]
+            runtime      = detail.get("runtime") if media_type == "movie" else None
+
+            # is_documentary is DERIVED from the genre ids, not stored by
+            # TMDB — recompute it whenever genres are refreshed below, or
+            # the two columns drift permanently out of sync (this branch is
+            # the only thing that mutates genres on an existing row).
+            is_documentary = 99 in [g.get("id") for g in detail.get("genres", [])]
+
+            # Read-only here: fed to compute_popularity_score but NEVER
+            # written back. media.release_date is the earliest *worldwide*
+            # date the pipeline derives from /movie/{id}/release_dates (see
+            # main.py Step 9's get_movie_release_dates call); the base
+            # detail payload's release_date is a different, less-precise
+            # value, so writing it through would silently revert that.
+            # main.py's Step 10 omits it for exactly this reason.
+            release_date = detail.get("release_date") or detail.get("first_air_date")
+
+            # rt_score isn't in the TMDB payload — everything else fed to
+            # compute_popularity_score comes fresh from *detail*.
+            row = db.client.table("media").select("rt_score").eq("id", media_id).maybe_single().execute().data or {}
+            rt_score = row.get("rt_score")
+
+            popularity_score = compute_popularity_score(
+                popularity or 0.0,
+                tmdb_score,
+                rt_score,
+                vote_count,
+                release_date=release_date,
+            )
+
+            # Sparse payload. Numeric fields are gated on `is not None`;
+            # overview/genres/status are gated on truthiness too, since
+            # TMDB returning "" or [] for those means "nothing to say", not
+            # "this title genuinely has no overview" — writing the empty
+            # value through would erase good existing data.
+            #
+            # release_date is deliberately NOT written here — see above.
+            media_update: dict = {"tmdb_score": tmdb_score}
+            if has_providers:
+                media_update["is_streamable_now"] = is_streamable
+            # popularity and popularity_score move together or not at all —
+            # writing a score derived from a fallback 0.0 while leaving the
+            # popularity column at its old value would make the two columns
+            # disagree about the same title.
+            if popularity is not None:
+                media_update["popularity"] = popularity
+                media_update["popularity_score"] = popularity_score
+            if vote_count is not None:
+                media_update["vote_count"] = vote_count
+            if runtime is not None:
+                media_update["runtime"] = runtime
+            if status:
+                media_update["status"] = status
+            if overview:
+                media_update["overview"] = overview
+            if genres:
+                media_update["genres"] = genres
+                media_update["is_documentary"] = is_documentary
+
+            db.client.table("media").update(media_update).eq("id", media_id).execute()
+            # Deliberately NOT stamping streaming_last_checked here. That
+            # column is also the cursor for the RT-score paths
+            # (get_movies_missing_rt_score, and every bucket in
+            # get_titles_to_reverify that feeds main.py's Step 11), and this
+            # script has no OMDb client — so stamping it would evict the
+            # title from the only paths that can refresh rt_score, freezing
+            # it on exactly the frequently-edited popular titles where RT
+            # actually moves. Re-introduce once a separate rt_last_checked
+            # cursor exists so the two cadences stop sharing one column.
+            refreshed += 1
+        except Exception as exc:
+            print(f"[CHANGES]   {media_type}/{tmdb_id}: refresh failed — {exc}")
+            refresh_errors += 1
+
+    print(
+        f"[CHANGES] Refresh done. {refreshed} refreshed, {refresh_missing} flagged missing, "
+        f"{type_mismatches} skipped (media_type mismatch), {refresh_errors} errors."
+    )
+
     try:
         db.set_bot_state("last_synced_at", now.isoformat())
     except Exception as exc:
@@ -177,7 +380,9 @@ def main() -> None:
 
     print(
         f"\n[CHANGES] SUMMARY checked={checked} skipped_existing={skipped_existing} "
-        f"new_inserted={new_inserted} errors={errors}"
+        f"new_inserted={new_inserted} errors={errors} "
+        f"refreshed={refreshed} refresh_missing={refresh_missing} refresh_errors={refresh_errors} "
+        f"refresh_type_mismatches={type_mismatches} refresh_cap_dropped={cap_dropped}"
     )
 
 
