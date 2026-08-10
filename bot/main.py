@@ -496,6 +496,13 @@ def main() -> None:
 
             score = omdb.get_rt_score(title=title, year=year, imdb_id=imdb_id)
 
+            # Once the quota guard trips, every further get_rt_score() is a
+            # guaranteed None — stop rather than spending the rest of the
+            # loop on calls that can't succeed.
+            if omdb.quota_exhausted:
+                print(f"[BOT] Step 11: OMDb quota exhausted — stopping after {title}.")
+                break
+
             if score is not None and score != current_score:
                 db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
                 print(f"[BOT] RT score {title}: {score}%")
@@ -523,6 +530,15 @@ def main() -> None:
         try:
             score = omdb.get_rt_score(title=title, year=year, imdb_id=imdb_id)
 
+            # Break BEFORE the stamp below. A None here caused by an
+            # exhausted quota is not a genuine "not found", but the else
+            # branch would still stamp streaming_last_checked and defer
+            # this movie's retry by the full re-check window. Leaving it
+            # un-stamped keeps it eligible on the next run.
+            if omdb.quota_exhausted:
+                print(f"[BOT] Step 11b: OMDb quota exhausted — stopping at {title} (left un-stamped, retries next run).")
+                break
+
             if score is not None:
                 db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
                 db.update_streaming_last_checked(item["id"])
@@ -549,14 +565,17 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 14: Checking for new seasons on Returning Series...")
 
-    returning_for_seasons = (
-        db.client.table("media")
-        .select("id, tmdb_id, title")
-        .eq("media_type", "tv")
-        .eq("status", "Returning Series")
-        .execute()
-        .data or []
-    )
+    # Paginated (see get_returning_series) — a single .execute() here was
+    # silently capped at PostgREST's ~1000-row limit, so every returning
+    # series past the first 1000 never got checked for a new season.
+    MAX_SEASON_CHECKS = int(os.environ.get("MAX_SEASON_CHECKS", "5000"))
+    returning_for_seasons = db.get_returning_series(limit=MAX_SEASON_CHECKS)
+    if len(returning_for_seasons) == MAX_SEASON_CHECKS:
+        print(
+            f"[BOT] Step 14: hit MAX_SEASON_CHECKS ceiling ({MAX_SEASON_CHECKS}) — "
+            "there may be more returning series than were checked this run; "
+            "raise MAX_SEASON_CHECKS if this persists."
+        )
 
     step14_shows_updated = 0
     step14_new_seasons   = 0

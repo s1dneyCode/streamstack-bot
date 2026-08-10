@@ -39,6 +39,18 @@ class OmdbClient:
         self._quota_exhausted = False
         self._limiter = RateLimiter(rate=OMDB_RATE_LIMIT)
 
+    @property
+    def quota_exhausted(self) -> bool:
+        """
+        True once this run has burned its OMDb daily quota. Read-only.
+
+        get_rt_score() returns None both for "genuinely not found" and for
+        "quota gone", so callers that treat a None as a definitive answer
+        (e.g. by stamping a re-check timestamp) should consult this first
+        and stop instead — every further call is a guaranteed no-op.
+        """
+        return self._quota_exhausted
+
     def get_rt_score(self, title: str, year: str | None = None, imdb_id: str | None = None) -> int | None:
         """
         Attempts to find the RT score using multiple search strategies in order:

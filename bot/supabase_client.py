@@ -1088,6 +1088,47 @@ class SupabaseClient:
         print(f"[Supabase] Found {len(rows)} movies without imdb_id.")
         return rows
 
+    def get_returning_series(self, limit: int) -> list[dict]:
+        """
+        Return up to *limit* rows (id, tmdb_id, title) for TV shows whose
+        status is 'Returning Series' — the candidate set for main.py's
+        Step 14 new-season check.
+
+        Paginated in 1000-row .range() chunks, same as
+        get_movies_without_imdb_id above. A single .execute() would be
+        silently capped at PostgREST's ~1000-row response limit, which had
+        been starving every returning series past the first 1000 of ever
+        being checked for a new season.
+        """
+        rows: list[dict] = []
+        page_size = 1000
+        offset = 0
+
+        while len(rows) < limit:
+            want = min(page_size, limit - len(rows))
+            try:
+                response = (
+                    self.client.table("media")
+                    .select("id, tmdb_id, title")
+                    .eq("media_type", "tv")
+                    .eq("status", "Returning Series")
+                    .order("id")
+                    .range(offset, offset + want - 1)
+                    .execute()
+                )
+            except Exception as exc:
+                print(f"[Supabase] Error fetching returning series at offset {offset}: {exc}")
+                break
+
+            batch = response.data or []
+            rows.extend(batch)
+            if len(batch) < want:
+                break
+            offset += len(batch)
+
+        print(f"[Supabase] Found {len(rows)} returning series.")
+        return rows
+
     def get_existing_tmdb_ids(self) -> set[int]:
         """
         Return the set of all tmdb_ids already present in public.media.
