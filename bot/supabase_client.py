@@ -90,6 +90,15 @@ _BAYES_C = 72.07  # global mean score
 
 _DEFAULT_REVERIFY_LIMIT = 3000
 
+# Cold lane (old, non-streamable catalog movies) reserved slice of the
+# reverify budget — see get_titles_to_reverify's two-lane design.
+_DEFAULT_REVERIFY_COLD_SLICE = 500
+
+# Page bound for the RT-retry pool. 1000 is a safe PostgREST page size and
+# always exceeds the OMDb daily quota (~950), so quota — not this limit —
+# is the real ceiling on how many titles Step 11b can actually score.
+_RT_RETRY_LIMIT = int(os.environ.get("RT_RETRY_LIMIT", 1000))
+
 _PRE_RELEASE_STATUSES = frozenset({'In Production', 'Post Production', 'Planned', 'Rumored'})
 
 ALLOWED_PROVIDERS = frozenset({
@@ -376,6 +385,18 @@ class SupabaseClient:
             self.client.table("media").update({"streaming_last_checked": now}).eq("id", media_id).execute()
         except Exception as exc:
             print(f"[Supabase] Error updating streaming_last_checked for media_id={media_id}: {exc}")
+
+    def update_rt_last_checked(self, media_id: int) -> None:
+        """Stamp rt_last_checked = now() on the media row (RT-retry cursor,
+        kept separate from streaming_last_checked so a streaming re-check
+        never evicts a title from the RT-retry queue and vice-versa)."""
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            self.client.table("media").update(
+                {"rt_last_checked": now}
+            ).eq("id", media_id).execute()
+        except Exception as exc:
+            print(f"[Supabase] Error updating rt_last_checked for media_id={media_id}: {exc}")
 
     def upsert_seasons(self, media_id: str, seasons: list[dict]) -> list[dict]:
         """
@@ -869,40 +890,61 @@ class SupabaseClient:
 
     def get_titles_to_reverify(self, today: date, limit: int | None = None) -> list[dict]:
         """
-        Return titles whose streaming availability should be re-checked today.
+        Return titles whose streaming availability should be re-checked today,
+        split into two budgeted lanes that sum to *limit*.
 
-        Movie / general categories:
+        HOT lane (hot_budget = limit - cold_slice) — anything with a live
+        availability story:
           - Coming Soon          (release_date > today)              — every 7 days or never checked
           - In Theatres recent   (in theatres, released ≤ 60d ago)   — every 7 days
           - In Theatres old      (in theatres, released > 60d ago)   — every 7 days
           - Streamable           (is_streamable_now = true)          — every 7 days
           - Recent (90-365d ago) critical streaming window           — every 7 days or never checked
-          - Old titles           (released > 365d ago)               — every 90 days or never checked
-
-        TV-specific categories (no providers yet):
           - TV released ≤ 30 days ago, not streamable               — every 3 days
           - TV released 30-90 days ago, not streamable              — every 7 days
           - TV released > 90 days ago, not streamable               — every 7 days
+
+        COLD lane (cold_slice, default 500, env REVERIFY_COLD_SLICE) — the
+        old non-streamable movie catalog, ordered by popularity_score DESC
+        with NULLS LAST:
+          - movies, released > 365d ago, not streamable, not in theatres
+            — every 90 days or never checked
+
+        Why the split: the cold catalog (coverage_sweep's historical
+        backfill) enters with streaming_last_checked = NULL, so under the
+        old single-queue design it sorted to the very front and flooded out
+        hot content — thousands of obscure never-checked old titles
+        crowding out the titles whose availability actually changes. The
+        cold lane now gets a reserved, bounded slice instead of the whole
+        queue, and orders by popularity_score so the old movies people
+        might actually search for are drained first. NULLS LAST is
+        deliberate: Postgres defaults DESC to NULLS FIRST, which would
+        refill the lane with exactly the never-scored obscure rows we're
+        trying to deprioritize.
+
+        Restricting cold to movies loses no coverage — old non-streamable
+        TV is already served by the third TV bucket in the hot lane.
 
         Every bucket also excludes tmdb_missing_at IS NOT NULL — a title
         TMDB no longer has (soft-flagged by sync_changes.py or the
         enrichment scan, never deleted) has no availability to re-verify.
 
-        Bounded to *limit* titles total (defaults to the REVERIFY_LIMIT env
-        var if set, else _DEFAULT_REVERIFY_LIMIT). Every bucket query is
-        ordered by streaming_last_checked ascending (nulls/never-checked
-        first) and capped at *limit* server-side, so a bucket that exceeds
-        Supabase's implicit page size can't silently drop its stalest rows
-        in favor of arbitrary ones. After merging, the combined set is
-        re-sorted the same way and truncated to *limit* — the titles that
-        miss the cut are simply the freshest-checked ones, which wait one
-        more day; nothing is lost, and this keeps nightly runtime from
-        growing unbounded as the catalog grows.
+        Each hot bucket is ordered by streaming_last_checked ascending
+        (nulls/never-checked first) and capped at hot_budget server-side, so
+        a bucket exceeding Supabase's page size can't silently drop its
+        stalest rows in favor of arbitrary ones. The merged hot set is
+        re-sorted the same way and truncated to hot_budget. There is
+        deliberately NO global re-sort across hot+cold at the end: cold rows
+        carry NULL/old streaming_last_checked, so any such sort would pull
+        them straight back to the front and undo the entire split.
         """
         if limit is None:
             limit = int(os.environ.get("REVERIFY_LIMIT", _DEFAULT_REVERIFY_LIMIT))
 
-        cols = "id, tmdb_id, title, media_type, release_date, is_in_theatres, status, streaming_last_checked"
+        cold_slice = int(os.environ.get("REVERIFY_COLD_SLICE", _DEFAULT_REVERIFY_COLD_SLICE))
+        hot_budget = max(0, limit - cold_slice)
+
+        cols = "id, tmdb_id, title, media_type, release_date, is_in_theatres, status, streaming_last_checked, popularity_score"
         today_str        = today.isoformat()
         three_days_ago   = (today - timedelta(days=3)).isoformat()
         seven_days_ago   = (today - timedelta(days=7)).isoformat()
@@ -911,14 +953,15 @@ class SupabaseClient:
         ninety_days_ago  = (today - timedelta(days=90)).isoformat()
         one_year_ago     = (today - timedelta(days=365)).isoformat()
 
-        results: list[dict] = []
+        hot_results: list[dict] = []
+        cold_results: list[dict] = []
         seen: set[int] = set()
 
         def _add(rows: list[dict]) -> None:
             for row in rows:
                 if row["id"] not in seen:
                     seen.add(row["id"])
-                    results.append(row)
+                    hot_results.append(row)
 
         try:
             # Coming Soon — null or stale after 7 days
@@ -927,7 +970,7 @@ class SupabaseClient:
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
                 .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
+                .limit(hot_budget)
                 .execute()).data or [])
 
             # In Theatres, recent release — stale after 7 days
@@ -938,7 +981,7 @@ class SupabaseClient:
                 .lt("streaming_last_checked", seven_days_ago)
                 .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
+                .limit(hot_budget)
                 .execute()).data or [])
 
             # In Theatres, older release — stale after 7 days
@@ -948,7 +991,7 @@ class SupabaseClient:
                 .lt("streaming_last_checked", seven_days_ago)
                 .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
+                .limit(hot_budget)
                 .execute()).data or [])
 
             # Streamable titles — stale after 7 days
@@ -957,7 +1000,7 @@ class SupabaseClient:
                 .lt("streaming_last_checked", seven_days_ago)
                 .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
+                .limit(hot_budget)
                 .execute()).data or [])
 
             # Recent titles (90-365d ago) — critical streaming window, stale after 7 days
@@ -967,17 +1010,14 @@ class SupabaseClient:
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
                 .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
+                .limit(hot_budget)
                 .execute()).data or [])
 
-            # Old titles (> 365d ago) — stale after 90 days
-            _add((self.client.table("media").select(cols)
-                .lt("release_date", one_year_ago)
-                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{ninety_days_ago}")
-                .is_("tmdb_missing_at", "null")
-                .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
-                .execute()).data or [])
+            # NOTE: the old "Old titles (> 365d ago)" bucket used to sit here.
+            # It is now the COLD lane below, with its own reserved budget —
+            # in the hot lane it flooded the queue, since coverage_sweep's
+            # historical backfill enters with streaming_last_checked = NULL
+            # and therefore sorted ahead of everything that actually changes.
 
             # TV: released in last 30 days, not yet streamable — stale after 3 days
             _add((self.client.table("media").select(cols)
@@ -988,7 +1028,7 @@ class SupabaseClient:
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{three_days_ago}")
                 .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
+                .limit(hot_budget)
                 .execute()).data or [])
 
             # TV: released 30-90 days ago, not yet streamable — stale after 7 days
@@ -1000,7 +1040,7 @@ class SupabaseClient:
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
                 .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
+                .limit(hot_budget)
                 .execute()).data or [])
 
             # TV: older than 90 days, not yet streamable — stale after 7 days
@@ -1011,21 +1051,59 @@ class SupabaseClient:
                 .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
                 .is_("tmdb_missing_at", "null")
                 .order("streaming_last_checked", desc=False, nullsfirst=True)
-                .limit(limit)
+                .limit(hot_budget)
                 .execute()).data or [])
 
         except Exception as exc:
             print(f"[Supabase] Error fetching titles to reverify: {exc}")
 
-        # Global re-sort across all buckets (each was only locally sorted),
-        # nulls/never-checked first, then cap — the titles cut here are
-        # simply the freshest-checked, which wait one more day.
-        results.sort(key=lambda r: r.get("streaming_last_checked") or "")
-        if len(results) > limit:
-            print(f"[Supabase] {len(results)} titles stale, capping to the {limit} oldest-checked tonight.")
-            results = results[:limit]
+        # Re-sort the merged HOT set (each bucket was only locally sorted),
+        # nulls/never-checked first, then cap to hot_budget — the titles cut
+        # here are simply the freshest-checked, which wait one more day.
+        hot_results.sort(key=lambda r: r.get("streaming_last_checked") or "")
+        if len(hot_results) > hot_budget:
+            print(f"[Supabase] {len(hot_results)} hot titles stale, capping to the {hot_budget} oldest-checked tonight.")
+            hot_results = hot_results[:hot_budget]
 
-        print(f"[Supabase] {len(results)} titles queued for re-verification.")
+        # ── COLD lane ────────────────────────────────────────────────────
+        # Old non-streamable catalog movies, popular first. Ordered by
+        # popularity_score DESC with NULLS LAST (nullsfirst=False) —
+        # Postgres defaults DESC to NULLS FIRST, which would refill this
+        # lane with the never-scored obscure backfill it exists to bound.
+        if cold_slice > 0:
+            try:
+                cold_rows = (self.client.table("media").select(cols)
+                    .eq("media_type", "movie")
+                    .lt("release_date", one_year_ago)
+                    .eq("is_streamable_now", False)
+                    .eq("is_in_theatres", False)
+                    .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{ninety_days_ago}")
+                    .is_("tmdb_missing_at", "null")
+                    .order("popularity_score", desc=True, nullsfirst=False)
+                    .order("id")
+                    .limit(cold_slice)
+                    .execute()).data or []
+            except Exception as exc:
+                print(f"[Supabase] Error fetching cold-lane titles to reverify: {exc}")
+                cold_rows = []
+
+            # Defensive dedup against the hot set. The lanes are disjoint by
+            # construction (hot has no old-non-streamable-movie bucket), so
+            # this should be a no-op — it exists so a future edit to either
+            # lane's filters can't silently double-queue a title.
+            for row in cold_rows:
+                if row["id"] not in seen:
+                    seen.add(row["id"])
+                    cold_results.append(row)
+
+        results = hot_results + cold_results
+
+        # Deliberately NO global re-sort across hot+cold here. Cold rows
+        # carry NULL/old streaming_last_checked, so sorting the combined
+        # list by that column would pull them all back to the front and
+        # undo the entire point of the split.
+        print(f"[Supabase] Reverify queue: {len(hot_results)} hot + "
+              f"{len(cold_results)} cold = {len(results)} titles.")
         return results
 
     def get_movies_missing_rt_score(self, today: date) -> list[dict]:
@@ -1036,7 +1114,19 @@ class SupabaseClient:
           - media_type = 'movie'
           - rt_score = 0 OR rt_score IS NULL
           - release_date <= today (already released)
-          - streaming_last_checked IS NULL OR < today - 7 days (retry cap)
+          - rt_last_checked IS NULL OR < today - 7 days (retry cap)
+
+        Gates on rt_last_checked, NOT streaming_last_checked: the two
+        cadences are deliberately separate cursors, so a streaming
+        re-verify (main.py Step 10, sync_changes.py's refresh loop) can
+        never evict a title from this RT-retry pool, and vice-versa.
+
+        Ordered rt_last_checked ascending (never-checked first) with a
+        stable id tiebreak and bounded to _RT_RETRY_LIMIT — previously this
+        ran a single unordered .execute(), so it returned an arbitrary
+        ≤1000 rows and never rotated, meaning the same slice of the backlog
+        was retried every night while the rest was never reached. The
+        partial index idx_media_movie_rt_retry backs this exact scan.
         """
         today_str        = today.isoformat()
         seven_days_ago   = (today - timedelta(days=7)).isoformat()
@@ -1048,7 +1138,10 @@ class SupabaseClient:
                 .eq("media_type", "movie")
                 .or_("rt_score.eq.0,rt_score.is.null")
                 .lte("release_date", today_str)
-                .or_(f"streaming_last_checked.is.null,streaming_last_checked.lt.{seven_days_ago}")
+                .or_(f"rt_last_checked.is.null,rt_last_checked.lt.{seven_days_ago}")
+                .order("rt_last_checked", desc=False, nullsfirst=True)
+                .order("id")
+                .limit(_RT_RETRY_LIMIT)
                 .execute()
             )
             rows = response.data or []

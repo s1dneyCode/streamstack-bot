@@ -503,6 +503,13 @@ def main() -> None:
                 print(f"[BOT] Step 11: OMDb quota exhausted — stopping after {title}.")
                 break
 
+            # A real OMDb attempt happened (the quota break above guarantees
+            # it), so stamp the RT cursor unconditionally — found or not.
+            # Step 11b calls get_movies_missing_rt_score AFTER this loop, so
+            # this is what keeps a title just checked here from being looked
+            # up a second time tonight on the same quota.
+            db.update_rt_last_checked(item["id"])
+
             if score is not None and score != current_score:
                 db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
                 print(f"[BOT] RT score {title}: {score}%")
@@ -531,21 +538,21 @@ def main() -> None:
             score = omdb.get_rt_score(title=title, year=year, imdb_id=imdb_id)
 
             # Break BEFORE the stamp below. A None here caused by an
-            # exhausted quota is not a genuine "not found", but the else
-            # branch would still stamp streaming_last_checked and defer
-            # this movie's retry by the full re-check window. Leaving it
-            # un-stamped keeps it eligible on the next run.
+            # exhausted quota is not a genuine "not found", but the branches
+            # below would still stamp rt_last_checked and defer this movie's
+            # retry by the full re-check window. Leaving it un-stamped keeps
+            # it eligible on the next run.
             if omdb.quota_exhausted:
                 print(f"[BOT] Step 11b: OMDb quota exhausted — stopping at {title} (left un-stamped, retries next run).")
                 break
 
             if score is not None:
                 db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
-                db.update_streaming_last_checked(item["id"])
+                db.update_rt_last_checked(item["id"])
                 print(f"[BOT] Step 11b {title}: found {score}%")
                 rt_recovered += 1
             else:
-                db.update_streaming_last_checked(item["id"])
+                db.update_rt_last_checked(item["id"])
                 print(f"[BOT] Step 11b {title}: still not found")
         except Exception as exc:
             print(f"[BOT] Step 11b {title}: failed — {exc}")

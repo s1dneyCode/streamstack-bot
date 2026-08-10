@@ -25,14 +25,17 @@ Changed ids are batch-checked against the DB first, then split two ways:
   streaming providers and is_streamable_now. A 404 here soft-flags
   tmdb_missing_at.
 
-  Two fields are deliberately NOT touched by the refresh:
-  - release_date, because media.release_date is the earliest *worldwide*
-    date derived from /movie/{id}/release_dates (see main.py Step 9), not
-    the base detail payload's value — writing it through would revert it.
-  - streaming_last_checked, because that column is also the cursor for the
-    RT-score paths and this script has no OMDb client, so stamping it would
-    evict the title from the only paths that can refresh rt_score. Revisit
-    once a separate rt_last_checked cursor exists.
+  A successful refresh also stamps streaming_last_checked, so main.py's
+  Step 10 doesn't re-fetch the same title within its window. Titles that
+  404'd (already soft-flagged) or errored are left un-stamped. This is safe
+  only because RT retry runs off its own rt_last_checked cursor — while the
+  two shared one column, stamping here evicted titles from the RT-retry
+  queue that this script has no OMDb client to serve.
+
+  release_date is deliberately NOT touched: media.release_date is the
+  earliest *worldwide* date derived from /movie/{id}/release_dates (see
+  main.py Step 9), not the base detail payload's value — writing it through
+  would revert it.
 
 TMDB-side deletions are caught in several places: the refresh branch above,
 main.py's Step 10 weekly provider re-verify, and enrich_new_titles.py's
@@ -354,15 +357,16 @@ def main() -> None:
                 media_update["is_documentary"] = is_documentary
 
             db.client.table("media").update(media_update).eq("id", media_id).execute()
-            # Deliberately NOT stamping streaming_last_checked here. That
-            # column is also the cursor for the RT-score paths
-            # (get_movies_missing_rt_score, and every bucket in
-            # get_titles_to_reverify that feeds main.py's Step 11), and this
-            # script has no OMDb client — so stamping it would evict the
-            # title from the only paths that can refresh rt_score, freezing
-            # it on exactly the frequently-edited popular titles where RT
-            # actually moves. Re-introduce once a separate rt_last_checked
-            # cursor exists so the two cadences stop sharing one column.
+            # A genuine provider re-check just happened, so stamp the
+            # streaming cursor — this is what stops main.py's Step 10 from
+            # re-fetching the same title again within its window. Safe now
+            # that RT retry runs off its own rt_last_checked cursor; while
+            # the two shared one column, stamping here evicted titles from
+            # the RT-retry queue that this script has no OMDb client to
+            # serve. Only reached on the success path: a 404 continues above
+            # (already soft-flagged via set_tmdb_missing) and an error falls
+            # to the except below, so neither gets stamped.
+            db.update_streaming_last_checked(media_id)
             refreshed += 1
         except Exception as exc:
             print(f"[CHANGES]   {media_type}/{tmdb_id}: refresh failed — {exc}")
