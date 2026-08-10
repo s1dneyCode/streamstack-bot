@@ -1354,10 +1354,20 @@ class TmdbClient:
                     agg = {}
 
             cast_raw = agg.get("cast", [])
+            # aggregate_credits has no flat "character" — a person's roles
+            # live in a `roles` array (one entry per character, each with an
+            # episode_count), so take the primary role: the one they played
+            # in the most episodes. max() returns the first maximal element,
+            # so ties (or missing episode_counts) fall back to the first
+            # role listed, and default={} covers an empty/absent array.
             cast = [
                 {
                     "name": m.get("name", ""),
-                    "character": m.get("character", ""),
+                    "character": max(
+                        m.get("roles") or [],
+                        key=lambda r: r.get("episode_count") or 0,
+                        default={},
+                    ).get("character", ""),
                     "order": m.get("order"),
                     "profile_path": m.get("profile_path"),
                 }
