@@ -10,7 +10,7 @@ Orchestrates the nightly pipeline:
 
 Run locally (requires env vars to be set in the shell):
     python bot/main.py
-    python bot/main.py --limit=1000   # cap Steps 10/10b/11's re-verify set
+    python bot/main.py --limit=1000   # cap Steps 10/11's re-verify set
 
 In production this file is invoked by the GitHub Actions nightly workflow
 (.github/workflows/nightly.yml) which injects secrets as environment variables.
@@ -65,7 +65,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print("[BOT] Starting StreamStack nightly bot...")
 
-    # Caps Steps 10/10b/11's re-verify set; falls through to the
+    # Caps Steps 10/11's re-verify set; falls through to the
     # REVERIFY_LIMIT env var (then a hardcoded default) when not passed —
     # see SupabaseClient.get_titles_to_reverify().
     reverify_limit = None
@@ -350,15 +350,18 @@ def main() -> None:
             step9_failed += 1
         print(f"[BOT] Step 9 {index}/{total}: {title} (status={status or 'unknown'})")
 
-    # Load reverify list for Steps 10, 10b and 11
+    # Load reverify list for Steps 10 and 11
     today = date.today()
     reverify_list = db.get_titles_to_reverify(today, limit=reverify_limit)
     print(f"\n[BOT] {len(reverify_list)} titles queued for periodic re-verification.")
 
     # ------------------------------------------------------------------ #
-    # Step 10 — Re-verify streaming providers for existing titles         #
+    # Step 10 — Re-verify streaming providers + refresh popularity/status #
+    # for existing titles (one appended detail call per title, replacing #
+    # the old separate Step 10 watch/providers call and Step 10b detail  #
+    # call — halves this hot path's TMDB calls per title)                #
     # ------------------------------------------------------------------ #
-    print(f"\n[BOT] Step 10: Re-verifying streaming providers for {len(reverify_list)} existing titles...")
+    print(f"\n[BOT] Step 10: Re-verifying streaming providers and refreshing popularity/status for {len(reverify_list)} existing titles...")
 
     reverified      = 0
     step10_missing  = 0
@@ -370,20 +373,22 @@ def main() -> None:
         title      = item["title"]
         media_type = item["media_type"]
 
-        # Fetched directly (not via the get_watch_providers(data=None) path)
-        # so a 404 — the title has been removed from TMDB — surfaces here
-        # instead of being swallowed into an empty-providers result.
+        # Appended watch/providers on the base detail call — one request
+        # covers both what Step 10 (providers) and the old Step 10b
+        # (popularity/status/vote_count/tmdb_score/runtime) each fetched
+        # separately. A 404 here means the title has been removed from
+        # TMDB entirely.
         try:
-            raw_providers = tmdb._get(f"/{media_type}/{tmdb_id}/watch/providers")
+            detail = tmdb._get(f"/{media_type}/{tmdb_id}", params={"append_to_response": "watch/providers"})
         except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else None
-            if status == 404:
+            http_status = exc.response.status_code if exc.response is not None else None
+            if http_status == 404:
                 db.set_tmdb_missing(media_id)
                 missing_tmdb_ids.add(tmdb_id)
                 step10_missing += 1
                 print(f"[BOT] Step 10 {title}: 404 — removed from TMDB, flagged tmdb_missing_at.")
                 continue
-            print(f"[BOT] Step 10 {title}: failed ({status}) — {exc}")
+            print(f"[BOT] Step 10 {title}: failed ({http_status}) — {exc}")
             step10_errors += 1
             continue
         except Exception as exc:
@@ -392,60 +397,74 @@ def main() -> None:
             continue
 
         try:
+            raw_providers = detail.get("watch/providers") or {}
             providers = tmdb.get_watch_providers(tmdb_id=tmdb_id, media_type=media_type, data=raw_providers)
             providers = {
                 region: {kind: [p for p in names if p in ALLOWED_PROVIDERS] for kind, names in kinds.items()}
                 for region, kinds in providers.items()
             }
 
-            if any(names for kinds in providers.values() for names in kinds.values()):
+            has_providers = any(names for kinds in providers.values() for names in kinds.values())
+            if has_providers:
                 is_streamable = bool(providers.get("US", {}).get("flatrate"))
                 db.sync_streaming_providers(media_id=media_id, providers=providers)
-                db.client.table("media").update({"is_streamable_now": is_streamable}).eq("id", media_id).execute()
 
+            popularity   = detail.get("popularity", 0.0) or 0.0
+            status       = detail.get("status")
+            vote_count   = detail.get("vote_count")
+            tmdb_score   = round((detail.get("vote_average") or 0) * 10)
+            release_date = detail.get("release_date") or detail.get("first_air_date")
+            runtime      = detail.get("runtime") if media_type == "movie" else None
+
+            # rt_score isn't in the TMDB payload — still read fresh from
+            # the DB row, everything else below comes straight from detail
+            # instead of a stale re-read.
+            row = db.client.table("media").select("rt_score").eq("id", media_id).maybe_single().execute().data or {}
+            rt_score = row.get("rt_score")
+
+            popularity_score = compute_popularity_score(
+                popularity,
+                tmdb_score,
+                rt_score,
+                vote_count,
+                release_date=release_date,
+            )
+
+            # Sparse payload — only set a field when it actually has a
+            # value, so this update can never clobber existing data with a
+            # null just because TMDB's response happened to omit a field.
+            media_update: dict = {
+                "popularity": popularity,
+                "popularity_score": popularity_score,
+                "tmdb_score": tmdb_score,
+            }
+            if has_providers:
+                media_update["is_streamable_now"] = is_streamable
+            if status is not None:
+                media_update["status"] = status
+            if vote_count is not None:
+                media_update["vote_count"] = vote_count
+            if runtime is not None:
+                media_update["runtime"] = runtime
+
+            db.client.table("media").update(media_update).eq("id", media_id).execute()
             db.update_streaming_last_checked(media_id)
             reverified += 1
 
-            print(f"[BOT] Re-verified {title}: {providers if any(providers.values()) else '(no results — kept existing data)'}")
+            print(
+                f"[BOT] Re-verified {title}: "
+                f"{providers if has_providers else '(no provider results — kept existing data)'} "
+                f"| popularity={popularity} → score={popularity_score}"
+            )
         except Exception as exc:
             print(f"[BOT] Step 10 {title}: failed — {exc}")
             step10_errors += 1
 
-    print(f"[BOT] Step 10 done. {reverified} titles re-verified, {step10_missing} flagged missing, {step10_errors} errors.")
+    print(f"[BOT] Step 10 done. {reverified} titles re-verified (providers + popularity/status), {step10_missing} flagged missing, {step10_errors} errors.")
 
     if missing_tmdb_ids:
         reverify_list = [item for item in reverify_list if item["tmdb_id"] not in missing_tmdb_ids]
-        print(f"[BOT] Excluded {len(missing_tmdb_ids)} newly-flagged-missing title(s) from Steps 10b/11.")
-
-    # ------------------------------------------------------------------ #
-    # Step 10b — Update popularity for titles due for re-verification      #
-    # ------------------------------------------------------------------ #
-    print(f"\n[BOT] Step 10b: Updating popularity for {len(reverify_list)} titles...")
-
-    step10b_errors = 0
-    for item in reverify_list:
-        tmdb_id    = item["tmdb_id"]
-        title      = item["title"]
-        media_type = item["media_type"]
-
-        try:
-            detail = tmdb._get(f"/{media_type}/{tmdb_id}")
-            popularity = detail.get("popularity", 0.0) or 0.0
-            row = db.client.table("media").select("tmdb_score, rt_score, vote_count, release_date").eq("tmdb_id", tmdb_id).maybe_single().execute().data or {}
-            popularity_score = compute_popularity_score(
-                popularity,
-                row.get("tmdb_score"),
-                row.get("rt_score"),
-                row.get("vote_count"),
-                release_date=row.get("release_date"),
-            )
-            db.client.table("media").update({"popularity": popularity, "popularity_score": popularity_score}).eq("tmdb_id", tmdb_id).execute()
-            print(f"[BOT] Updated popularity for {title}: {popularity} → score={popularity_score}")
-        except Exception as exc:
-            print(f"[BOT] Failed to update popularity for {title}: {exc}")
-            step10b_errors += 1
-
-    print(f"[BOT] Step 10b done. {step10b_errors} errors.")
+        print(f"[BOT] Excluded {len(missing_tmdb_ids)} newly-flagged-missing title(s) from Step 11.")
 
     # ------------------------------------------------------------------ #
     # Step 11 — Update RT scores for movies due for re-verification       #
@@ -786,7 +805,7 @@ def main() -> None:
     # single bad title/show/season can never prevent this from printing. #
     # ------------------------------------------------------------------ #
     total_errors = (
-        step9_failed + step10_errors + step10b_errors + step11_errors
+        step9_failed + step10_errors + step11_errors
         + step11b_errors + step14_errors + step17_errors + step17b_errors
     )
     print(
