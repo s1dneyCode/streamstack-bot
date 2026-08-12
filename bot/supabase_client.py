@@ -480,19 +480,30 @@ class SupabaseClient:
         """
         Compute average runtime across all episodes for a TV show and update media.runtime.
         Skips null/0 values. Returns the computed average or None if no data.
+
+        The average is computed server-side by the get_avg_episode_runtime
+        RPC rather than by pulling every episode row across the wire. The
+        old form selected media_episodes with a media_seasons!inner embed
+        (an INNER JOIN LATERAL) just to reduce it to one integer in Python,
+        once per show inside the per-title loops in backfill_seasons.py and
+        enrich_new_titles.py — 15,980 calls averaging 219ms and peaking at
+        7,932ms against an 8s statement_timeout, i.e. the single most
+        expensive statement in the database and a real timeout risk.
+
+        The RPC skips NULL and 0 runtimes, matching the `if r.get("runtime")`
+        filter this used to do in Python, and returns NULL when a show has
+        no usable runtimes — in which case media.runtime is left untouched
+        and None is returned, exactly as the old empty-list path did.
         """
         try:
-            rows = (
-                self.client.table("media_episodes")
-                .select("runtime, media_seasons!inner(media_id)")
-                .eq("media_seasons.media_id", media_id)
+            avg = (
+                self.client.rpc("get_avg_episode_runtime", {"p_media_id": media_id})
                 .execute()
-                .data or []
+                .data
             )
-            runtimes = [r["runtime"] for r in rows if r.get("runtime")]
-            if not runtimes:
+            if avg is None:
                 return None
-            avg = round(sum(runtimes) / len(runtimes))
+            avg = int(avg)
             self.client.table("media").update({"runtime": avg}).eq("id", media_id).execute()
             return avg
         except Exception as exc:
