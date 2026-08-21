@@ -18,6 +18,7 @@ In production this file is invoked by the GitHub Actions nightly workflow
 
 import os
 import sys
+import time
 from datetime import date
 
 import requests
@@ -853,6 +854,10 @@ def main() -> None:
 
     print(f"[BOT] Step 17b done. {step17b_checked} series checked, {step17b_episodes} new episodes inserted, {step17b_errors} errors.")
 
+    # Last write of the run: every media row above has landed, so the view is
+    # rebuilt from a complete picture rather than a half-ingested one.
+    refresh_popular_cache()
+
     # ------------------------------------------------------------------ #
     # End-of-run summary — always reached: every per-item loop above      #
     # isolates its own exceptions rather than propagating them, so a      #
@@ -866,6 +871,65 @@ def main() -> None:
         f"\n[BOT] SUMMARY discovered={len(combined)} new_inserted={step9_inserted} "
         f"reverified={reverified} enriched={rt_updated + rt_recovered} errors={total_errors}"
     )
+
+
+def refresh_popular_cache() -> None:
+    """Rebuild public.media_popular_cache from the media rows this run wrote.
+
+    THIS LANDS BEFORE ANY CLIENT CHANGE, DELIBERATELY. The materialized view
+    already exists in production and nothing refreshes it. If the app shipped
+    first, Popular would freeze at whatever ranking the view was built with —
+    fast, plausible, and wrong, which is the worst way for a cache to fail.
+
+    WHY A DIRECT CONNECTION AND NOT AN RPC. REFRESH MATERIALIZED VIEW
+    CONCURRENTLY cannot run inside a transaction block, and every PL/pgSQL
+    function body IS one — Postgres rejects it outright with "cannot be
+    executed from a function". So db.client.rpc(...) is not an option that
+    merely performs worse; it is one that fails at runtime. The rest of this
+    bot speaks PostgREST, which cannot issue the statement at all. Hence
+    psycopg with autocommit, which is the only shape that works.
+
+    Non-concurrent would run in a function, and is rejected for a different
+    reason: it takes ACCESS EXCLUSIVE on the view for the whole rebuild, so
+    every Popular request would block for those seconds.
+
+    OPTIONAL BY DESIGN. DATABASE_URL is not in load_env()'s required list. A
+    deployment that has not been given the secret yet skips the refresh and
+    says so, exactly like a failed one — the ranking simply stays as it was,
+    which is today's behaviour and harmless. Adding it to `required` would
+    make every existing deployment exit(1) until the secret is set: a
+    sequencing trap of precisely the kind this function exists to remove.
+
+    A FAILURE NEVER FAILS THE RUN. Everything above this point has already
+    been written; refusing to finish over a stale cache would throw away a
+    good ingest.
+    """
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        print("[BOT] Popular cache: DATABASE_URL not set — refresh skipped.")
+        return
+
+    started = time.monotonic()
+    try:
+        import psycopg
+
+        # autocommit=True is load-bearing, not tidiness: psycopg opens a
+        # transaction implicitly otherwise, and CONCURRENTLY is refused inside
+        # one.
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "refresh materialized view concurrently "
+                    "public.media_popular_cache"
+                )
+        elapsed = time.monotonic() - started
+        print(f"[BOT] Popular cache refreshed in {elapsed:.1f}s.")
+    except Exception as exc:
+        elapsed = time.monotonic() - started
+        print(
+            f"[BOT] Popular cache refresh FAILED after {elapsed:.1f}s — {exc}. "
+            "Previous ranking kept; ingest continues."
+        )
 
 
 if __name__ == "__main__":
