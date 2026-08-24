@@ -854,9 +854,9 @@ def main() -> None:
 
     print(f"[BOT] Step 17b done. {step17b_checked} series checked, {step17b_episodes} new episodes inserted, {step17b_errors} errors.")
 
-    # Last write of the run: every media row above has landed, so the view is
-    # rebuilt from a complete picture rather than a half-ingested one.
-    refresh_popular_cache()
+    # Last write of the run: every media row above has landed, so the views
+    # are rebuilt from a complete picture rather than a half-ingested one.
+    refresh_materialized_caches()
 
     # ------------------------------------------------------------------ #
     # End-of-run summary — always reached: every per-item loop above      #
@@ -873,13 +873,25 @@ def main() -> None:
     )
 
 
-def refresh_popular_cache() -> None:
-    """Rebuild public.media_popular_cache from the media rows this run wrote.
+# The materialized views this run rebuilds, in the order they are refreshed.
+#
+# ONE LIST RATHER THAN ONE FUNCTION EACH. Every word of the reasoning below —
+# why psycopg and not an RPC, why CONCURRENTLY, why DATABASE_URL stays
+# optional, why a failure never fails the run — is identical for both, and a
+# second copy of it would be a second thing to keep true.
+_MATERIALIZED_CACHES = (
+    ("Popular", "public.media_popular_cache"),
+    ("New At Home", "public.media_new_at_home_cache"),
+)
 
-    THIS LANDS BEFORE ANY CLIENT CHANGE, DELIBERATELY. The materialized view
-    already exists in production and nothing refreshes it. If the app shipped
-    first, Popular would freeze at whatever ranking the view was built with —
-    fast, plausible, and wrong, which is the worst way for a cache to fail.
+
+def refresh_materialized_caches() -> None:
+    """Rebuild the read-path materialized views from the rows this run wrote.
+
+    THIS LANDS BEFORE ANY CLIENT CHANGE, DELIBERATELY. Each view already
+    exists in production and nothing refreshes it. If the app shipped first,
+    that rail would freeze at whatever the view was built with — fast,
+    plausible, and wrong, which is the worst way for a cache to fail.
 
     WHY A DIRECT CONNECTION AND NOT AN RPC. REFRESH MATERIALIZED VIEW
     CONCURRENTLY cannot run inside a transaction block, and every PL/pgSQL
@@ -906,29 +918,48 @@ def refresh_popular_cache() -> None:
     """
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
-        print("[BOT] Popular cache: DATABASE_URL not set — refresh skipped.")
+        print("[BOT] Materialized caches: DATABASE_URL not set — refresh skipped.")
         return
 
-    started = time.monotonic()
     try:
         import psycopg
+    except Exception as exc:
+        print(f"[BOT] Materialized caches: psycopg unavailable — {exc}. Skipped.")
+        return
 
+    try:
         # autocommit=True is load-bearing, not tidiness: psycopg opens a
         # transaction implicitly otherwise, and CONCURRENTLY is refused inside
         # one.
+        #
+        # ONE CONNECTION, BOTH VIEWS. Opening a second would only add a
+        # handshake; the refreshes themselves are sequential either way.
         with psycopg.connect(dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "refresh materialized view concurrently "
-                    "public.media_popular_cache"
-                )
-        elapsed = time.monotonic() - started
-        print(f"[BOT] Popular cache refreshed in {elapsed:.1f}s.")
+            for label, view in _MATERIALIZED_CACHES:
+                started = time.monotonic()
+                try:
+                    with conn.cursor() as cur:
+                        # The view name is a module constant, never input.
+                        cur.execute(
+                            f"refresh materialized view concurrently {view}"
+                        )
+                    elapsed = time.monotonic() - started
+                    print(f"[BOT] {label} cache refreshed in {elapsed:.1f}s.")
+                except Exception as exc:
+                    # PER VIEW, NOT PER RUN. One stale cache must not cost the
+                    # other its refresh — they are independent rails, and the
+                    # failure modes that hit one (a lock, a bad definition) do
+                    # not imply the other.
+                    elapsed = time.monotonic() - started
+                    print(
+                        f"[BOT] {label} cache refresh FAILED after "
+                        f"{elapsed:.1f}s — {exc}. Previous data kept."
+                    )
     except Exception as exc:
-        elapsed = time.monotonic() - started
+        # Connecting failed, so neither ran.
         print(
-            f"[BOT] Popular cache refresh FAILED after {elapsed:.1f}s — {exc}. "
-            "Previous ranking kept; ingest continues."
+            f"[BOT] Materialized caches: connection FAILED — {exc}. "
+            "Previous data kept; ingest continues."
         )
 
 
