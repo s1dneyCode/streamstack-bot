@@ -873,44 +873,49 @@ def main() -> None:
     )
 
 
-# The materialized views this run rebuilds, in the order they are refreshed.
+# The end-of-run refresh: one step per DB function, run in this order.
 #
-# ONE LIST RATHER THAN ONE FUNCTION EACH. Every word of the reasoning below —
-# why psycopg and not an RPC, why CONCURRENTLY, why DATABASE_URL stays
-# optional, why a failure never fails the run — is identical for both, and a
-# second copy of it would be a second thing to keep true.
-_MATERIALIZED_CACHES = (
-    ("Popular", "public.media_popular_cache"),
-    ("New At Home", "public.media_new_at_home_cache"),
+# FUNCTIONS, NOT VIEWS. Which materialized views get rebuilt, and in what
+# order, is owned by these SQL functions — the same ones pg_cron runs every
+# 6 h. A new view goes inside one of them, not into this list.
+_REFRESH_STEPS = (
+    ("Explore + Popular", "select public.refresh_media_explore_universe()"),
+    ("Home rails", "select public.refresh_home_rail_universes()"),
 )
 
 
 def refresh_materialized_caches() -> None:
-    """Rebuild the read-path materialized views from the rows this run wrote.
+    """Rebuild the app's read-path materialized views from this run's rows.
 
-    THIS LANDS BEFORE ANY CLIENT CHANGE, DELIBERATELY. Each view already
-    exists in production and nothing refreshes it. If the app shipped first,
-    that rail would freeze at whatever the view was built with — fast,
-    plausible, and wrong, which is the worst way for a cache to fail.
+    THE ORDER LIVES IN THE DATABASE, NOT HERE. Two SQL functions own it:
+      - public.refresh_media_explore_universe(): media_explore_universe, then
+        media_popular_cache, which is built from it — refreshing the cache on
+        its own would re-rank a stale universe.
+      - public.refresh_home_rail_universes(): media_new_at_home_universe, then
+        media_coming_soon_universe.
+    pg_cron runs both every 6 h. The bot runs them too, straight after the
+    ingest, so the app sees tonight's rows now instead of at the next tick.
+    To add or reorder a view, change those functions: this list only names
+    them, so the bot and pg_cron always rebuild the same views in the same
+    order.
 
-    WHY A DIRECT CONNECTION AND NOT AN RPC. REFRESH MATERIALIZED VIEW
-    CONCURRENTLY cannot run inside a transaction block, and every PL/pgSQL
-    function body IS one — Postgres rejects it outright with "cannot be
-    executed from a function". So db.client.rpc(...) is not an option that
-    merely performs worse; it is one that fails at runtime. The rest of this
-    bot speaks PostgREST, which cannot issue the statement at all. Hence
-    psycopg with autocommit, which is the only shape that works.
+    CONCURRENTLY RUNS FINE INSIDE THEM. Unlike CREATE INDEX CONCURRENTLY,
+    REFRESH MATERIALIZED VIEW CONCURRENTLY is allowed inside a transaction
+    block, so a PL/pgSQL body can issue it — both functions do, and their
+    pg_cron runs succeed. Readers are not blocked while a view rebuilds.
 
-    Non-concurrent would run in a function, and is rejected for a different
-    reason: it takes ACCESS EXCLUSIVE on the view for the whole rebuild, so
-    every Popular request would block for those seconds.
+    WHY A DIRECT CONNECTION AND NOT db.client.rpc(). Both functions are owned
+    by, and executable as, postgres — the role DATABASE_URL connects as. The
+    PostgREST roles behind SUPABASE_KEY are not the path: EXECUTE on
+    refresh_home_rail_universes is not granted to service_role, and PostgREST
+    sessions carry an 8 s statement_timeout that a full refresh can exceed.
+    Hence psycopg.
 
     OPTIONAL BY DESIGN. DATABASE_URL is not in load_env()'s required list. A
-    deployment that has not been given the secret yet skips the refresh and
-    says so, exactly like a failed one — the ranking simply stays as it was,
-    which is today's behaviour and harmless. Adding it to `required` would
-    make every existing deployment exit(1) until the secret is set: a
-    sequencing trap of precisely the kind this function exists to remove.
+    deployment without the secret skips the refresh and says so, exactly like
+    a failed one — the views keep their data until pg_cron's next run, which
+    is harmless. Adding it to `required` would make every such deployment
+    exit(1) before ingesting anything, trading a whole run for a cache.
 
     A FAILURE NEVER FAILS THE RUN. Everything above this point has already
     been written; refusing to finish over a stale cache would throw away a
@@ -928,31 +933,31 @@ def refresh_materialized_caches() -> None:
         return
 
     try:
-        # autocommit=True is load-bearing, not tidiness: psycopg opens a
-        # transaction implicitly otherwise, and CONCURRENTLY is refused inside
-        # one.
+        # autocommit=True is load-bearing, not tidiness: each function call
+        # commits on its own. Otherwise psycopg wraps both steps in one
+        # implicit transaction — a failed first step would abort it and take
+        # the second down with it, which is exactly what the per-step
+        # isolation below exists to prevent.
         #
-        # ONE CONNECTION, BOTH VIEWS. Opening a second would only add a
-        # handshake; the refreshes themselves are sequential either way.
+        # ONE CONNECTION, BOTH STEPS. Opening a second would only add a
+        # handshake; the steps are sequential either way.
         with psycopg.connect(dsn, autocommit=True) as conn:
-            for label, view in _MATERIALIZED_CACHES:
+            for label, statement in _REFRESH_STEPS:
                 started = time.monotonic()
                 try:
                     with conn.cursor() as cur:
-                        # The view name is a module constant, never input.
-                        cur.execute(
-                            f"refresh materialized view concurrently {view}"
-                        )
+                        # The statement is a module constant, never input.
+                        cur.execute(statement)
                     elapsed = time.monotonic() - started
-                    print(f"[BOT] {label} cache refreshed in {elapsed:.1f}s.")
+                    print(f"[BOT] {label} refreshed in {elapsed:.1f}s.")
                 except Exception as exc:
-                    # PER VIEW, NOT PER RUN. One stale cache must not cost the
-                    # other its refresh — they are independent rails, and the
+                    # PER STEP, NOT PER RUN. One stale rail must not cost the
+                    # other its refresh — they are independent, and the
                     # failure modes that hit one (a lock, a bad definition) do
                     # not imply the other.
                     elapsed = time.monotonic() - started
                     print(
-                        f"[BOT] {label} cache refresh FAILED after "
+                        f"[BOT] {label} refresh FAILED after "
                         f"{elapsed:.1f}s — {exc}. Previous data kept."
                     )
     except Exception as exc:
