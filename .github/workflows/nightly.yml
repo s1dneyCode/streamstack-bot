@@ -9,13 +9,44 @@ on:
     # is verified. See the `monthly-cleanup` job's `if: false` gate below.
     # - cron: '0 6 1 * *'      # monthly cleanup: 1st of each month at 06:00 UTC (03:00 Chile)
   workflow_dispatch:
+  # Push and pull_request run the `tests` job ONLY. Every job that touches
+  # production is gated to schedule / workflow_dispatch below, so a push can
+  # never start an ingest.
+  push:
+  pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}
+  # Ingest runs (schedule / dispatch) share one group so two bots never
+  # overlap — exactly as before. Push / PR runs get a group per ref instead:
+  # in the bot's group they would wait behind a running ingest, and a newer
+  # pending run cancels an older pending one, so a push could cancel a
+  # queued nightly.
+  group: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && format('tests-{0}', github.ref) || github.workflow }}
   cancel-in-progress: false
 
 jobs:
+  tests:
+    # Unit tests with fakes: no network, no database, no secrets.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile
+        run: python -m py_compile bot/*.py tests/*.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t .
+
   run-bot:
+    # Writes to production: never on push / pull_request.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:

@@ -955,16 +955,28 @@ def refresh_materialized_caches() -> None:
                     # other its refresh — they are independent, and the
                     # failure modes that hit one (a lock, a bad definition) do
                     # not imply the other.
+                    #
+                    # str(exc) is safe here, unlike on connect below: the DSN
+                    # was parsed and the connection is up, so the message is
+                    # the server's error or a connection-state one ("server
+                    # closed the connection unexpectedly") — neither quotes
+                    # the conninfo.
                     elapsed = time.monotonic() - started
                     print(
                         f"[BOT] {label} refresh FAILED after "
                         f"{elapsed:.1f}s — {exc}. Previous data kept."
                     )
     except Exception as exc:
-        # Connecting failed, so neither ran.
+        # Connecting failed, so neither step ran (or, rarely, closing the
+        # connection failed after both did).
+        #
+        # THE CLASS NAME ONLY, NEVER str(exc). On a malformed DSN psycopg
+        # quotes the offending part of it back — password included — and this
+        # repo's Actions logs are public. GitHub masks a secret's exact value,
+        # not a fragment of it, so the message itself must never be printed.
         print(
-            f"[BOT] Materialized caches: connection FAILED — {exc}. "
-            "Previous data kept; ingest continues."
+            f"[BOT] Materialized caches: connection FAILED — "
+            f"{type(exc).__name__}. Refresh skipped."
         )
 
 

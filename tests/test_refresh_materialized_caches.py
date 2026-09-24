@@ -23,7 +23,16 @@ EXPLORE = "select public.refresh_media_explore_universe()"
 HOME_RAILS = "select public.refresh_home_rail_universes()"
 
 # A stand-in that can never resolve (.invalid), so no test can reach a database.
-FAKE_DSN = "postgresql://fake-user:fake-password@db.invalid:5432/postgres"
+FAKE_PASSWORD = "fake-password"
+FAKE_DSN = f"postgresql://fake-user:{FAKE_PASSWORD}@db.invalid:5432/postgres"
+
+
+class OperationalError(Exception):
+    """Named like psycopg's, since the class name is what the log shows."""
+
+
+class ProgrammingError(Exception):
+    """What psycopg raises for a malformed DSN — quoting the bad part of it."""
 
 
 class _FakePsycopg:
@@ -79,12 +88,30 @@ class _FakeCursor:
             raise RuntimeError("simulated failure")
 
 
+def _chained_like_psycopg(message: str) -> ProgrammingError:
+    """How psycopg 3.2.13 reports a malformed DSN (measured): a
+    ProgrammingError raised `from None` over an OperationalError that carries
+    the same message — so the secret is in __context__ as well."""
+    try:
+        try:
+            raise OperationalError(message)
+        except OperationalError:
+            raise ProgrammingError(message) from None
+    except ProgrammingError as exc:
+        return exc
+
+
 def _run(fake: _FakePsycopg, dsn: str | None) -> str:
-    """Call the refresh with `fake` as psycopg and return what it printed."""
+    """Call the refresh with `fake` as psycopg and return what it printed.
+
+    stdout and stderr land in one buffer, as they do in the Actions log, so a
+    leak through a traceback or a stray stderr write is caught too.
+    """
     out = io.StringIO()
     with mock.patch.dict(sys.modules, {"psycopg": fake.module()}), \
             mock.patch.dict(os.environ), \
-            contextlib.redirect_stdout(out):
+            contextlib.redirect_stdout(out), \
+            contextlib.redirect_stderr(out):
         if dsn is None:
             os.environ.pop("DATABASE_URL", None)
         else:
@@ -157,7 +184,7 @@ class RefreshMaterializedCachesTest(unittest.TestCase):
                 )
 
     def test_connect_failure_skips_both_without_raising(self):
-        fake = _FakePsycopg(connect_error=RuntimeError("simulated connect failure"))
+        fake = _FakePsycopg(connect_error=OperationalError("simulated connect failure"))
 
         out = _run(fake, FAKE_DSN)
 
@@ -165,9 +192,35 @@ class RefreshMaterializedCachesTest(unittest.TestCase):
         self.assertEqual(fake.executed, [])
         self.assertEqual(
             out,
-            "[BOT] Materialized caches: connection FAILED — simulated connect "
-            "failure. Previous data kept; ingest continues.\n",
+            "[BOT] Materialized caches: connection FAILED — OperationalError. "
+            "Refresh skipped.\n",
         )
+
+    def test_connect_failure_never_echoes_the_dsn(self):
+        # Shaped like what psycopg 3.2.13 raises for a malformed DSN (measured
+        # with fake DSNs): the offending token is quoted back, password and all.
+        # This repo's Actions logs are public, and GitHub masks only a secret's
+        # exact value, never a fragment of it.
+        leaks = (
+            _chained_like_psycopg(
+                f'invalid percent-encoded token: "{FAKE_PASSWORD}%zz"'
+            ),
+            ProgrammingError(f'unexpected spaces found in "{FAKE_DSN}"'),
+            OperationalError(f"failed to resolve host '{FAKE_PASSWORD}@db.invalid'"),
+        )
+        for i, exc in enumerate(leaks):
+            with self.subTest(case=i, exc=type(exc).__name__):
+                fake = _FakePsycopg(connect_error=exc)
+
+                out = _run(fake, FAKE_DSN)
+
+                self.assertNotIn(FAKE_PASSWORD, out)
+                self.assertNotIn("db.invalid", out)
+                self.assertEqual(
+                    out,
+                    f"[BOT] Materialized caches: connection FAILED — "
+                    f"{type(exc).__name__}. Refresh skipped.\n",
+                )
 
 
 if __name__ == "__main__":
