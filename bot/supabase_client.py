@@ -227,6 +227,10 @@ class SupabaseClient:
         media_dict must contain:
             tmdb_id, title, overview, poster_path, media_type,
             release_date, rt_score, is_in_theatres, is_streamable_now
+
+        title_logo_url and title_logo_luminance are always written from the
+        dict, together: a caller that passes no logo writes NULL to both
+        (bot/logo_luminance.py is the one definition of the luminance).
         """
         print(f"[Supabase] Upserting media: {media_dict.get('title')} (tmdb_id={media_dict.get('tmdb_id')})")
 
@@ -249,6 +253,7 @@ class SupabaseClient:
             if media_dict.get("media_type") == "movie":
                 upsert_payload["runtime"] = media_dict.get("runtime")
             upsert_payload["title_logo_url"]    = media_dict.get("title_logo_url")
+            upsert_payload["title_logo_luminance"] = media_dict.get("title_logo_luminance")
             upsert_payload["certification"]     = media_dict.get("certification")
             upsert_payload["genres"]            = media_dict.get("genres") or []
             upsert_payload["original_language"] = media_dict.get("original_language")

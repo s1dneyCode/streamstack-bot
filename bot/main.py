@@ -28,6 +28,7 @@ from .omdb import OmdbClient
 from .supabase_client import SupabaseClient, compute_popularity_score, _PRE_RELEASE_STATUSES, ALLOWED_PROVIDERS
 from .filters import ALLOWED_LANGUAGES
 from .migrate_images import poster_basename, refresh_poster
+from .logo_luminance import luminance_for_logo
 
 
 def load_env() -> dict[str, str]:
@@ -58,6 +59,19 @@ def extract_year(release_date: str | None) -> str | None:
     if release_date and len(release_date) >= 4:
         return release_date[:4]
     return None
+
+
+def step9_logo_fields(tmdb, tmdb_id, media_type, images_data, measure=luminance_for_logo) -> dict:
+    """Step 9's logo and its luminance over black, for one new title.
+
+    The logo is chosen exactly as Step 9 always chose it (get_title_logo on
+    the prefetched images payload). Whoever writes title_logo_url writes the
+    luminance in the same payload: a title without a logo gets None for both
+    and nothing is fetched; a logo that cannot be measured gets None for the
+    luminance, which backfill_title_logo_luminance.py measures later.
+    """
+    url = tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type, data=images_data)
+    return {"title_logo_url": url, "title_logo_luminance": measure(url) if url else None}
 
 
 def main() -> None:
@@ -342,7 +356,7 @@ def main() -> None:
             "popularity":   item.get("popularity", 0.0),
             "imdb_id":      item.get("imdb_id"),
             "runtime":      runtime,
-            "title_logo_url": tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type, data=images_data),
+            **step9_logo_fields(tmdb, tmdb_id, media_type, images_data),
             "certification":  tmdb.get_certification(tmdb_id=tmdb_id, media_type=media_type, data=certification_data),
             "genres":         genres,
             "vote_count":     vote_count,
