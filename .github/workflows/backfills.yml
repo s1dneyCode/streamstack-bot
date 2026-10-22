@@ -24,6 +24,7 @@ on:
           - credits
           - runtime
           - title-logos
+          - title-logo-luminance
           - backdrops
           - certifications
           - seasons
@@ -352,6 +353,23 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_title_logos
+
+  backfill-title-logo-luminance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    if: github.event.inputs.job == 'title-logo-luminance'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill title logo luminance
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_title_logo_luminance
 
   backfill-backdrops:
     runs-on: ubuntu-latest

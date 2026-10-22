@@ -56,6 +56,12 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_title_logos
 
+      - name: 5b - Backfill title logo luminance
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_title_logo_luminance
+
       - name: 6 - Backfill backdrops
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
