@@ -28,7 +28,7 @@ python -m bot.bulk_import --batch-size 2000
 
 **Known environment gotcha**: `requirements.txt` only pins `supabase==2.9.1` with no lock file for transitive deps. Depending on when you `pip install`, you can get a `realtime` version that needs `websockets>=13`, while pip resolves an older `websockets==12.0` — this fails with `ModuleNotFoundError: No module named 'websockets.asyncio'` on `import supabase`. Fix locally with `pip install -U websockets`. This isn't pinned in `requirements.txt` because it hasn't broken CI yet, but it's a real local-dev trap.
 
-**Pillow** (`Pillow==12.2.0`, pinned in `requirements.txt`) is the repo's one image library: `bot/logo_luminance.py` decodes title logos with it. There is no numpy — the per-pixel loop over a w300 logo takes ~10–25 ms.
+**Pillow** (`Pillow==12.3.0`, pinned in `requirements.txt`; the latest 12.x — 13.0 raises the Python floor to 3.11) is the repo's one image library: `bot/logo_luminance.py` decodes title logos with it. There is no numpy — the per-pixel loop over a w300 logo takes ~10–25 ms.
 
 Every entry-point script requires env vars and **fails fast with a clear message** if one is missing (no silent partial runs):
 ```
