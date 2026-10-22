@@ -1,6 +1,7 @@
 """
 One-time backfill: fetch and store title_logo_url for all media titles
-where the field is currently NULL.
+where the field is currently NULL — with its luminance over black
+(bot/logo_luminance.py) in the same update.
 
 Run via:
     python -m bot.backfill_title_logos
@@ -12,6 +13,7 @@ import time
 
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
+from .logo_luminance import luminance_for_logo
 
 
 def load_env() -> dict[str, str]:
@@ -24,6 +26,27 @@ def load_env() -> dict[str, str]:
             sys.exit(1)
         config[key] = value
     return config
+
+
+def backfill_title_logo(db, tmdb, row: dict, i: int, total: int) -> bool:
+    """One row: fetch the title logo and write it with its luminance.
+
+    The URL and its luminance go in ONE update; the luminance is None (SQL
+    NULL) when it could not be measured, so backfill_title_logo_luminance.py
+    measures it later. Returns True when a logo was written.
+    """
+    logo_url = tmdb.get_title_logo(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
+
+    if logo_url:
+        luminance = luminance_for_logo(logo_url)
+        db.client.table("media").update(
+            {"title_logo_url": logo_url, "title_logo_luminance": luminance}
+        ).eq("id", row["id"]).execute()
+        note = f"luminance {luminance:.2f}" if luminance is not None else "luminance pending"
+        print(f"[LOGOS] {i}/{total} {row['title']}: {logo_url} · {note}")
+        return True
+    print(f"[LOGOS] {i}/{total} {row['title']}: no logo found")
+    return False
 
 
 def main() -> None:
@@ -58,14 +81,9 @@ def main() -> None:
     print(f"[LOGOS] {total} titles need logo backfill.")
 
     for i, row in enumerate(needs_logo, start=1):
-        logo_url = tmdb.get_title_logo(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
-
-        if logo_url:
-            db.client.table("media").update({"title_logo_url": logo_url}).eq("id", row["id"]).execute()
-            print(f"[LOGOS] {i}/{total} {row['title']}: {logo_url}")
+        if backfill_title_logo(db, tmdb, row, i, total):
             updated += 1
         else:
-            print(f"[LOGOS] {i}/{total} {row['title']}: no logo found")
             missing += 1
 
         time.sleep(0.25)

@@ -30,7 +30,7 @@ Steps per title (in order):
   2. Trailers       — fetch YouTube trailers from TMDB (skipped if media_trailers rows exist)
   3. Credits        — fetch cast, directors, writers, producers (skipped if media_credits rows exist)
   4. Seasons        — fetch seasons + episodes (TV only, skipped if media_seasons rows exist)
-  5. Title logos    — fetch title logo URL (skipped if already set)
+  5. Title logos    — fetch title logo URL + its luminance, one update (skipped if already set)
   6. Certifications — fetch US certification (skipped if already set)
   7. Runtime        — fetch runtime minutes (movies only, skipped if already set)
   8. Genres         — fill genres array (skipped if already set)
@@ -51,6 +51,7 @@ import requests
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
 from .migrate_images import migrate_poster, migrate_carousel, download_image
+from .logo_luminance import luminance_for_logo
 
 POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 BUCKET      = "media-images"
@@ -85,6 +86,34 @@ def load_env() -> dict[str, str]:
             sys.exit(1)
         config[key] = value
     return config
+
+
+def enrich_title_logo(db, tmdb, row: dict, stats: dict) -> bool:
+    """Step 5 for one row: fetch the title logo and write it with its luminance.
+
+    Skipped when the row already has a logo. The URL and its luminance go in
+    ONE update; the luminance is None (SQL NULL) when it could not be
+    measured, so backfill_title_logo_luminance.py measures it later — a logo
+    is never withheld for want of its number. Returns True when the step
+    raised, which the caller turns into row_had_error, as the inline step did.
+    """
+    if row.get("title_logo_url"):
+        return False
+    try:
+        logo_url = tmdb.get_title_logo(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
+        if logo_url:
+            luminance = luminance_for_logo(logo_url)
+            db.client.table("media").update(
+                {"title_logo_url": logo_url, "title_logo_luminance": luminance}
+            ).eq("id", row["id"]).execute()
+            stats["logos"] += 1
+            note = f"luminance {luminance:.2f}" if luminance is not None else "luminance pending"
+            print(f"[ENRICH]   logo: ok · {note}")
+    except Exception as exc:
+        print(f"[ENRICH]   logo: failed — {exc}")
+        stats["errors"] += 1
+        return True
+    return False
 
 
 def main() -> None:
@@ -299,17 +328,8 @@ def main() -> None:
             time.sleep(0.25)
 
         # ── Step 5: Title logos ─────────────────────────────────────────
-        if not row.get("title_logo_url"):
-            try:
-                logo_url = tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type)
-                if logo_url:
-                    db.client.table("media").update({"title_logo_url": logo_url}).eq("id", media_id).execute()
-                    stats["logos"] += 1
-                    print(f"[ENRICH]   logo: ok")
-            except Exception as exc:
-                print(f"[ENRICH]   logo: failed — {exc}")
-                stats["errors"] += 1
-                row_had_error = True
+        if enrich_title_logo(db, tmdb, row, stats):
+            row_had_error = True
 
         # ── Step 6: Certifications ──────────────────────────────────────
         if not row.get("certification"):
