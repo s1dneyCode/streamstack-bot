@@ -52,6 +52,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import httpx  # supabase's own transport (installed with it): its errors are the dropped-connection class
 import requests
 
 from .tmdb import TmdbClient
@@ -94,6 +95,15 @@ def load_env() -> dict[str, str]:
     return config
 
 
+# The queue RPC's retry (B3.1): three attempts, 2 s then 4 s apart, on a
+# transient failure only — see fetch_queue's docstring.
+_QUEUE_ATTEMPTS = 3
+_QUEUE_RETRY_DELAYS = (2, 4)
+_TRANSIENT_QUEUE_CODES = {"503", "520", "521", "522", "523", "524",
+                          "PGRST000", "PGRST001", "PGRST002", "PGRST003"}
+_TRANSIENT_QUEUE_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+
+
 def fetch_queue(db, limit: int) -> list[dict]:
     """This run's titles, from the server, in the order of what the app shows.
 
@@ -108,22 +118,42 @@ def fetch_queue(db, limit: int) -> list[dict]:
     shape. No fallback to the table select: a silent fallback would hide a
     wrong deploy order behind a run that looks healthy.
 
-    Any other failure propagates. The RPC is a POST, which postgrest's client
-    does not retry on a transient 503/520 the way it retried the old GET: such
-    a night fails loudly at the selection, and the next night tries again.
+    A TRANSIENT failure is retried here (B3.1): a 5xx from PostgREST or
+    Cloudflare — 503 and 520–524, which postgrest reports as APIError.code
+    when the body is not JSON, and PostgREST's own PGRST000–PGRST003 for a
+    connection or pool failure — or a dropped or timed-out connection
+    (httpx's TimeoutException, NetworkError, RemoteProtocolError). Three
+    attempts in all, 2 s then 4 s apart, one log line per retry —
+    "queue RPC failed (attempt N of 3): <class>: <message> (code C) —
+    retrying in S s", the "(code C)" only when postgrest gives one, the
+    message cut at 200 characters; after the third the error propagates. A retry is safe: enrichment_queue is STABLE
+    and has no side effects. Anything else — a 4xx such as 42501 — propagates
+    at once. (Until B3.1 this note said the RPC, a POST, is not retried by
+    postgrest's client, which retries only GETs; that is still so, which is
+    why the retry lives here.)
     """
-    try:
-        return db.client.rpc("enrichment_queue", {"p_limit": limit}).execute().data or []
-    except Exception as exc:
-        if getattr(exc, "code", None) == "PGRST202" or "Could not find the function" in str(
-            getattr(exc, "message", None) or exc
-        ):
+    for attempt in range(1, _QUEUE_ATTEMPTS + 1):
+        try:
+            return db.client.rpc("enrichment_queue", {"p_limit": limit}).execute().data or []
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            message = str(getattr(exc, "message", None) or exc)
+            if code == "PGRST202" or "Could not find the function" in message:
+                print(
+                    "[ENRICH] ERROR: the server has no public.enrichment_queue — apply migration "
+                    "20261023170000_enrichment_queue_priority_b3.sql before this code runs."
+                )
+                sys.exit(1)
+            transient = isinstance(exc, _TRANSIENT_QUEUE_ERRORS) or str(code) in _TRANSIENT_QUEUE_CODES
+            if not transient or attempt >= _QUEUE_ATTEMPTS:
+                raise
+            delay = _QUEUE_RETRY_DELAYS[attempt - 1]
+            detail = f"{message[:200]} (code {code})" if code is not None else message[:200]
             print(
-                "[ENRICH] ERROR: the server has no public.enrichment_queue — apply migration "
-                "20261023170000_enrichment_queue_priority_b3.sql before this code runs."
+                f"[ENRICH] queue RPC failed (attempt {attempt} of {_QUEUE_ATTEMPTS}): "
+                f"{type(exc).__name__}: {detail} — retrying in {delay} s"
             )
-            sys.exit(1)
-        raise
+            time.sleep(delay)
 
 
 def enrich_title_logo(db, tmdb, row: dict, stats: dict) -> bool:

@@ -161,6 +161,13 @@ def _steps_tables() -> dict:
 
 class FetchQueueTest(unittest.TestCase):
 
+    def setUp(self):
+        # B3.1: fetch_queue may sleep between retries. These tests must never
+        # wait for real, not even when a regression sends them into a retry.
+        patcher = mock.patch.object(enrich_new_titles.time, "sleep", lambda seconds: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_calls_the_rpc_once_with_its_limit_and_returns_the_rows(self):
         rows = [_row(id="a"), _row(id="b")]
         db = _FakeSupabase(queue=rows)
