@@ -20,7 +20,14 @@ Expected schema (create once in the Supabase dashboard / migrations):
         release_date    date          -- earliest worldwide release date
         us_release_date date          -- earliest US theatrical/digital date (movies only)
         rt_score        smallint      -- 0-100 or NULL
-        is_in_theatres  boolean       -- always False for now
+        is_in_theatres  boolean       -- set True/False daily by daily_verify.py from TMDb's
+                                      -- US now-playing list; the nightly's Step 9 and the
+                                      -- bare inserts (bulk_import, sync_changes,
+                                      -- coverage_sweep) insert new titles with False;
+                                      -- backfill_states.py writes False to every row unless
+                                      -- run with --skip-theatres; never written by the
+                                      -- enrichment (since B3.1). Used to say "always
+                                      -- False for now", stale since daily_verify.py
         is_streamable_now boolean
         title_logo_url  text          -- TMDb w500 logo, English first; NULL if TMDb has none
                                       -- (added 2026-10 — previously not listed here)

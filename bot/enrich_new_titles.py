@@ -38,7 +38,9 @@ Steps per title (in order):
   6. Certifications — fetch US certification (skipped if already set)
   7. Runtime        — fetch runtime minutes (movies only, skipped if already set)
   8. Genres         — fill genres array (skipped if already set)
-  9. States         — update is_in_theatres / is_streamable_now (always runs, no API call)
+  9. States         — update is_streamable_now (always runs, no API call); never writes
+                       is_in_theatres since B3.1 — daily_verify.py owns it (this line used
+                       to say "update is_in_theatres / is_streamable_now")
 
 Run via:
     python -m bot.enrich_new_titles
@@ -415,25 +417,22 @@ def main() -> None:
 
             # is_in_theatres is never set here — daily_verify.py (TMDB
             # /movie/now_playing, runs daily at 8am UTC) is the only
-            # source of truth for it.
-            if has_providers:
-                new_theatres, new_streamable = False, True
-            else:
-                new_theatres, new_streamable = False, False
-
-            old_theatres   = row.get("is_in_theatres", False)
+            # source of truth for it. True since B3.1 (23/10): until then
+            # this step wrote is_in_theatres=False whenever it wrote at all
+            # (for any title with a provider row since de25032; on every
+            # write since d396b4f, which also added this comment), throwing
+            # an in-theatres title out of the New In Theatres rail until
+            # daily_verify.py's next run.
+            # The key is now absent from the payload, not rewritten.
+            new_streamable = has_providers
             old_streamable = row.get("is_streamable_now", False)
 
-            if new_theatres != old_theatres or new_streamable != old_streamable:
+            if new_streamable != old_streamable:
                 db.client.table("media").update({
-                    "is_in_theatres":    new_theatres,
                     "is_streamable_now": new_streamable,
                 }).eq("id", media_id).execute()
                 stats["states"] += 1
-                print(
-                    f"[ENRICH]   state: in_theatres={new_theatres}, "
-                    f"streamable={new_streamable}"
-                )
+                print(f"[ENRICH]   state: streamable={new_streamable}")
         except Exception as exc:
             print(f"[ENRICH]   states: failed — {exc}")
             stats["errors"] += 1
