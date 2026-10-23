@@ -90,6 +90,12 @@ class _FakeSupabase:
     def table(self, name):
         return _FakeQuery(self, name)
 
+    def rpc(self, name, params):
+        # B3: enrich_new_titles takes its queue from rpc("enrichment_queue");
+        # serve the same canned rows the table read used to return.
+        rows = self.tables.get("media", [])
+        return types.SimpleNamespace(execute=lambda: types.SimpleNamespace(data=list(rows)))
+
     @property
     def updates(self):
         """[(table, payload, eq_args)] for every executed update, in order."""

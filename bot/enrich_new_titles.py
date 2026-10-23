@@ -2,12 +2,16 @@
 Enrichment bot: state-driven scan that populates all secondary fields for
 any title that hasn't been enriched yet, regardless of when it was created.
 
-Selection is WHERE enriched_at IS NULL AND tmdb_missing_at IS NULL, newest
-created_at first, capped at --limit (or the ENRICH_LIMIT env var, default
-500) titles per run. This replaces the old created_at >= NOW() - Xh
+Selection comes from the server: public.enrichment_queue(p_limit), migration
+20261023170000 (fetch_queue below). Rows WHERE enriched_at IS NULL AND
+tmdb_missing_at IS NULL, in the order of what the app shows — in US theatres,
+then inside a home-rail universe, then by popularity, then newest — capped at
+--limit (or the ENRICH_LIMIT env var, default 500) titles per run. It used to
+be a table select ordered newest created_at first, which never returned to the
+rows a capped night left behind. That replaced the old created_at >= NOW() - Xh
 time-window query — a title missed by one run (nightly ran long,
 enrichment itself failed, etc.) is no longer orphaned forever; it just
-stays NULL and gets picked up by the next run. Bare rows from
+stays NULL and stays in the queue, served in the order above. Bare rows from
 bulk_import.py and sync_changes.py self-enrich the same way, no manual
 full-backfill needed.
 
@@ -88,6 +92,38 @@ def load_env() -> dict[str, str]:
     return config
 
 
+def fetch_queue(db, limit: int) -> list[dict]:
+    """This run's titles, from the server, in the order of what the app shows.
+
+    public.enrichment_queue(p_limit) — migration 20261023170000 — returns the
+    same thirteen columns the old table select did, for rows with enriched_at
+    IS NULL AND tmdb_missing_at IS NULL: in US theatres first, then inside a
+    home-rail universe, then by popularity, then newest. PostgREST cannot
+    order by membership in a materialized view, hence a function.
+
+    FAILS FAST if the function is missing (PostgREST PGRST202, "Could not find
+    the function"): one line naming the migration, exit 1 — the load_env()
+    shape. No fallback to the table select: a silent fallback would hide a
+    wrong deploy order behind a run that looks healthy.
+
+    Any other failure propagates. The RPC is a POST, which postgrest's client
+    does not retry on a transient 503/520 the way it retried the old GET: such
+    a night fails loudly at the selection, and the next night tries again.
+    """
+    try:
+        return db.client.rpc("enrichment_queue", {"p_limit": limit}).execute().data or []
+    except Exception as exc:
+        if getattr(exc, "code", None) == "PGRST202" or "Could not find the function" in str(
+            getattr(exc, "message", None) or exc
+        ):
+            print(
+                "[ENRICH] ERROR: the server has no public.enrichment_queue — apply migration "
+                "20261023170000_enrichment_queue_priority_b3.sql before this code runs."
+            )
+            sys.exit(1)
+        raise
+
+
 def enrich_title_logo(db, tmdb, row: dict, stats: dict) -> bool:
     """Step 5 for one row: fetch the title logo and write it with its luminance.
 
@@ -131,22 +167,12 @@ def main() -> None:
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
 
-    print(f"[ENRICH] Scanning up to {limit} title(s) where enriched_at IS NULL (newest created_at first)...")
-
-    new_titles = (
-        db.client.table("media")
-        .select(
-            "id, tmdb_id, title, media_type, poster_path, poster_url, release_date, "
-            "is_in_theatres, is_streamable_now, title_logo_url, certification, "
-            "genres, runtime"
-        )
-        .is_("enriched_at", "null")
-        .is_("tmdb_missing_at", "null")
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-        .data or []
+    print(
+        f"[ENRICH] Scanning up to {limit} title(s) where enriched_at IS NULL "
+        "(server order: in theatres → home rails → popular → newest)..."
     )
+
+    new_titles = fetch_queue(db, limit)
     scanned = len(new_titles)
     print(f"[ENRICH] {scanned} title(s) to process this run.")
 
