@@ -27,7 +27,19 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
+      # The schedule serves 1,000 titles a night, said here in so many words
+      # (Fran, 23/10: the cap is not raised; the server's enrichment_queue
+      # decides WHICH thousand). Before B3 the schedule shared the dispatch
+      # command below and, having no inputs, fell to its `|| '2000'`.
+      - name: Enrich new titles (scheduled, 1,000 a night)
+        if: github.event_name == 'schedule'
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.enrich_new_titles --limit=1000
       - name: Enrich new titles
+        if: github.event_name == 'workflow_dispatch'
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
