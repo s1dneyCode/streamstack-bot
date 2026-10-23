@@ -22,6 +22,14 @@ Expected schema (create once in the Supabase dashboard / migrations):
         rt_score        smallint      -- 0-100 or NULL
         is_in_theatres  boolean       -- always False for now
         is_streamable_now boolean
+        title_logo_url  text          -- TMDb w500 logo, English first; NULL if TMDb has none
+                                      -- (added 2026-10 — previously not listed here)
+        title_logo_luminance real     -- 0..1, the logo's luminance over black, CHECK 0..1;
+                                      -- bot/logo_luminance.py is the one definition;
+                                      -- NULL = not measured. Every writer of title_logo_url
+                                      -- writes it in the same payload; the luminance
+                                      -- backfill fills it alone, later (added 2026-10
+                                      -- with the column)
         enriched_at     timestamptz   -- NULL until enrich_new_titles.py completes a row
                                       -- with no step raising; drives its state scan
         tmdb_missing_at timestamptz   -- NULL normally; set (never cleared automatically)
