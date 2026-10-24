@@ -68,6 +68,21 @@ Required vars by script vary — `TMDB_API_KEY` + `SUPABASE_URL` + `SUPABASE_KEY
 
 5. **`bot/cleanup_low_quality.py`** — monthly (`nightly.yml`'s second cron, 1st of month). Deletes titles with `vote_count < 10`, released >90 days ago, not in theatres, not streamable. All four conditions must hold.
 
+6. **`bot/sync_trakt.py`** — Trakt Sync (`trakt_sync.yml`). It writes two things the app reads.
+   - **The `trakt_*` columns.** `get_trending_this_week` (Home's Trending This Week rail and the hero banner) orders by `trakt_watchers_week`. `get_media_popular` blends a `trakt_watchers_week` rank 50/50 with its score. `get_new_in_theatres` admits a title on `trakt_watchers_week >= 500`, one of its three quality gates (the others are 50 votes and popularity 50). `get_coming_soon` admits on `trakt_anticipated_score >= 1000` (or popularity ≥ 20) and breaks ties with it. The cards draw a heat badge at `trakt_watchers_week >= 2000`, and the detail screen's «N watching» is gated by `trakt_trending_rank` and prints `trakt_watchers_week`. Only the bot's own `compute_popularity_score` ignores them. The module's «shadow mode» label is older than these readers.
+   - **`media_related`.** The app's More Like This rail reads it through `get_related_titles`.
+
+   Phase A ingests Trakt's watched/trending/anticipated lists. Phase B drains related titles. Since B5 (decision 1.439), Phase B takes its queue from the server: `public.trakt_related_queue(p_limit, p_before)`, migration `20261024210000`, through `get_titles_for_related_drain()`. The queue holds titles with `tmdb_missing_at IS NULL` that were never synced or were synced before `TRAKT_RELATED_FIX_DATE` (`2026-10-24T16:00:00Z`; every older stamp came from the wrong path). It serves them in the app's order (in US theatres → inside a home-rail universe → by popularity → newest). Phase B asks in slices of 1,000 (PostgREST's cap) until `TRAKT_RELATED_BATCH` is filled or a slice comes back short.
+
+   Per title, it first resolves Trakt's own id (`TraktClient.resolve_id`, `/search/tmdb/{id}?type=movie|show`) and asks `/related` by THAT id. Before B5 it passed our `tmdb_id`, which Trakt read as its own id: most titles got nothing, and the rest got another title's relateds. A title Trakt does not know is stamped with zero rows.
+
+   The guards:
+   - The run refuses to start at or before the fix date, before Phase A writes anything.
+   - Phase B exits 1, naming that migration, if the function is missing. Phase A's writes have already landed by then; nothing is stamped.
+   - Phase B exits 1, after the SUMMARY, when the stamps are not landing: a full slice brings nothing the run has not tried and some of it was stamped, or a title comes back after its second stamp. One lost stamp, or a short slice of them, is drained once more. A title whose drain failed was never stamped, and heads the next slice as an error.
+
+   Cadence: daily at 03:00 UTC with 3,000 titles while the 56,411 titles stamped before the fix date are re-drained, then back to Mondays. That is at least ≈ 19 days (56,411 ÷ 3,000), a floor because the same queue also serves titles never synced and a failed attempt counts against the 3,000. Go back by hand once no row with `tmdb_missing_at IS NULL` has `trakt_related_synced_at` before the fix date. A title that fails every attempt keeps its old stamp, so if that check stalls on a handful of rows that `related_errors` keeps counting, look at them rather than waiting. `tests/test_workflow_trakt_sync.py` pins the daily cron and the workflow's header, so both change in the same commit; the workflow's top comment says the same.
+
 ### Conventions that span files
 
 - **`load_env()` fail-fast pattern**: every script's `main()` starts by calling a local `load_env()` that checks `os.environ` for its required keys and `sys.exit(1)`s with a labeled error if any are missing. Copy this pattern exactly when adding a new script — don't introduce `python-dotenv` loading or default-fallback behavior.

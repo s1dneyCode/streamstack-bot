@@ -1,14 +1,26 @@
+# Daily while the 56,411 titles stamped before 2026-10-24 are re-drained
+# (≈ 19 days at 3,000); back to Mondays after — decision 1.439.
+# The cut-off is the instant 2026-10-24T16:00:00Z (the bot's
+# TRAKT_RELATED_FIX_DATE). The 19 days are a floor, because the same queue also
+# serves titles never synced. Go back by hand once no row with tmdb_missing_at
+# IS NULL has trakt_related_synced_at before that instant, and change
+# tests/test_workflow_trakt_sync.py, which pins this file, in the same commit.
+# Each title costs up to two Trakt calls (resolve the id, then /related; one
+# when Trakt does not know it) at the client's 3.0/s: ~33 min for 3,000 when
+# every title resolves, plus whatever the database round trips add beyond the
+# limiter's wait. The job gets 90 minutes.
 name: Trakt Sync
 
 on:
   schedule:
-    - cron: '0 8 * * 1'  # Mondays 08:00 UTC (~05:00 Chile)
+    - cron: '0 3 * * *'  # daily 03:00 UTC (~00:00 Chile), hours ahead of the other daily jobs (06:00 UTC on)
+    # - cron: '0 8 * * 1'  # Mondays 08:00 UTC (~05:00 Chile) — back to this after the re-drain
   workflow_dispatch:
     inputs:
       related_batch:
-        description: 'Max titles to drain via trakt_related_synced_at IS NULL this run'
+        description: 'Max titles to drain from trakt_related_queue this run (asked in slices of 1,000)'
         required: false
-        default: '4000'
+        default: '3000'
 
 concurrency:
   group: ${{ github.workflow }}
@@ -17,7 +29,7 @@ concurrency:
 jobs:
   trakt-sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,5 +42,5 @@ jobs:
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          TRAKT_RELATED_BATCH: ${{ github.event.inputs.related_batch || '4000' }}
+          TRAKT_RELATED_BATCH: ${{ github.event.inputs.related_batch || '3000' }}
         run: python -m bot.sync_trakt
