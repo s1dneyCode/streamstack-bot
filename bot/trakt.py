@@ -28,6 +28,7 @@ TRAKT_BASE = "https://api.trakt.tv"
 TRAKT_RATE_LIMIT = 3.0  # requests/second
 
 _MEDIA_TYPE_PATH = {"movie": "movies", "tv": "shows"}
+_SEARCH_TYPE = {"movie": "movie", "tv": "show"}  # Trakt's ?type= and result key
 
 
 def load_env() -> dict[str, str]:
@@ -172,13 +173,44 @@ class TraktClient:
             params={"extended": "full", "page": page, "limit": limit},
         )
 
-    def get_related(self, media_type: str, trakt_id_or_slug, limit: int = 20) -> list[dict]:
+    def resolve_id(self, media_type: str, tmdb_id: int) -> int | None:
         """
-        Related titles for a single movie/show. *trakt_id_or_slug* accepts
-        any of Trakt's interchangeable id types (trakt id, slug, imdb id,
-        or — what we actually pass — our own tmdb_id). Not paginated via
-        headers like the list endpoints; Trakt just returns up to *limit*
-        items directly.
+        Trakt's own id for our *tmdb_id*, through Trakt's ID lookup
+        (GET /search/tmdb/{tmdb_id}?type=movie|show). Each result is
+        {"type": "movie"|"show", "movie"|"show": {"ids": {"trakt", "tmdb", …}}}.
+
+        The FIRST result whose type is the one asked AND whose ids.tmdb is
+        *tmdb_id* wins. A tmdb id can name a movie and a show at once (1416
+        is a movie and Grey's Anatomy), so the type is the filter, never a
+        tiebreak. None when the list is empty, nothing matches, or Trakt
+        answers 404; any other error propagates as _request() raises it.
+        """
+        self._path_segment(media_type)  # validates media_type the same way
+        kind = _SEARCH_TYPE[media_type]
+        try:
+            results = self._get(f"/search/tmdb/{tmdb_id}", params={"type": kind})
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                return None
+            raise
+        for result in results or []:
+            if result.get("type") != kind:
+                continue
+            # Each result carries its title object under its OWN type's key.
+            ids = (result.get(result.get("type")) or {}).get("ids") or {}
+            if ids.get("tmdb") == tmdb_id:
+                return ids.get("trakt")
+        return None
+
+    def get_related(self, media_type: str, trakt_id: int, limit: int = 20) -> list[dict]:
+        """
+        Related titles for a single movie/show, by *trakt_id*: a Trakt id,
+        never our tmdb_id — B5 (resolve it with resolve_id() first). Trakt
+        reads a bare number in this path as ITS id, so a tmdb_id here
+        answers with whatever other title Trakt has under that number. (This
+        used to say the parameter took "our own tmdb_id" — that was the bug.)
+        Not paginated via headers like the list endpoints; Trakt just
+        returns up to *limit* items directly.
         """
         segment = self._path_segment(media_type)
-        return self._get(f"/{segment}/{trakt_id_or_slug}/related", params={"limit": limit})
+        return self._get(f"/{segment}/{trakt_id}/related", params={"limit": limit})

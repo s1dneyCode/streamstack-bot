@@ -192,7 +192,10 @@ def _run_phase_a(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, top
 
 
 def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, batch_size: int) -> dict:
-    stats = {"drained": 0, "related_written": 0, "errors": 0}
+    # scanned: titles taken from the queue. resolved / unresolved: the outcome
+    # of the Trakt id lookup. errors: any title whose processing raised — a
+    # title can be resolved and then fail at /related or at the write.
+    stats = {"scanned": 0, "resolved": 0, "unresolved": 0, "related_rows": 0, "errors": 0}
 
     batch = db.get_titles_for_related_drain(batch_size)
     total = len(batch)
@@ -202,9 +205,22 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
         media_id = row["id"]
         tmdb_id = row["tmdb_id"]
         media_type = row["media_type"]
+        stats["scanned"] += 1
 
         try:
-            items = trakt.get_related(media_type, tmdb_id)
+            # B5: /related wants Trakt's own id; our tmdb_id there names
+            # another title. Resolve it first.
+            trakt_id = trakt.resolve_id(media_type, tmdb_id)
+            if trakt_id is None:
+                stats["unresolved"] += 1
+                kind = "show" if media_type == "tv" else "movie"
+                print(f"[TRAKT] unresolved tmdb={tmdb_id} type={kind} «{row.get('title')}»")
+                # Zero rows, so a stale row from the old path can never survive.
+                db.replace_media_related(media_id, [], run_start_iso)
+                db.stamp_trakt_related_synced(media_id, run_start_iso)
+                continue
+            stats["resolved"] += 1
+            items = trakt.get_related(media_type, trakt_id, limit=20)
 
             related_rows = []
             rank = 0
@@ -222,11 +238,10 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
             db.replace_media_related(media_id, related_rows, run_start_iso)
             db.stamp_trakt_related_synced(media_id, run_start_iso)
 
-            stats["drained"] += 1
-            stats["related_written"] += len(related_rows)
+            stats["related_rows"] += len(related_rows)
 
             if i % 100 == 0:
-                print(f"[TRAKT SYNC]   progress: {i}/{total} drained")
+                print(f"[TRAKT SYNC]   progress: {i}/{total} scanned")
         except Exception as exc:
             print(f"[TRAKT SYNC]   tmdb_id={tmdb_id}: related drain failed — {exc}")
             stats["errors"] += 1
@@ -253,7 +268,8 @@ def main() -> None:
         f"\n[TRAKT SYNC] SUMMARY updated={phase_a['updated']} "
         f"type_mismatches={phase_a['type_mismatches']} "
         f"unmatched_anticipated={len(phase_a['unmatched_anticipated_ids'])} "
-        f"related_drained={phase_b['drained']} related_written={phase_b['related_written']} "
+        f"related_scanned={phase_b['scanned']} related_resolved={phase_b['resolved']} "
+        f"related_unresolved={phase_b['unresolved']} related_rows={phase_b['related_rows']} "
         f"related_errors={phase_b['errors']} "
         f"api_calls~{phase_a['api_calls']} "
         f"unmatched_anticipated_sample={sample}"

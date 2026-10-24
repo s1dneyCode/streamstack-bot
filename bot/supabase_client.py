@@ -859,7 +859,7 @@ class SupabaseClient:
             want = min(PAGE, limit - len(rows))
             page = (
                 self.client.table("media")
-                .select("id, tmdb_id, media_type")
+                .select("id, tmdb_id, media_type, title")
                 .is_("trakt_related_synced_at", "null")
                 .is_("tmdb_missing_at", "null")
                 .order("popularity", desc=True)
