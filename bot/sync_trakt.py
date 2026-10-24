@@ -24,10 +24,16 @@ Two phases:
   unreleased titles) and only logged, never inserted.
 
   Phase B — related-titles drain (bounded, state-driven, mirrors
-  enrich_new_titles.py's enriched_at IS NULL scan). Selects up to
-  TRAKT_RELATED_BATCH rows where trakt_related_synced_at IS NULL, ordered
-  by popularity desc, fetches /related for each, and replaces that title's
-  media_related rows.
+  enrich_new_titles.py's queue). Since B5 (24/10): takes up to
+  TRAKT_RELATED_BATCH titles from the server's trakt_related_queue(p_limit,
+  p_before) — never synced, or synced before TRAKT_RELATED_FIX_DATE — in the
+  app's order (in theatres → home rails → popularity → newest), in slices of
+  RELATED_SLICE; for each, resolves Trakt's own id from our tmdb_id
+  (TraktClient.resolve_id), fetches /related by that id, and replaces that
+  title's media_related rows (zero rows when Trakt has no such title). It used
+  to select trakt_related_synced_at IS NULL by popularity desc and ask
+  /related with our tmdb_id — which Trakt read as ITS id, so most titles got
+  nothing and the rest got another title's relateds.
 
 Failure philosophy is deliberately NOT this repo's usual "log and keep
 going" default: Phase A's list fetches are allowed to raise straight out of
@@ -51,6 +57,13 @@ from .supabase_client import SupabaseClient
 
 DEFAULT_TRAKT_TOP_N = 300
 DEFAULT_TRAKT_RELATED_BATCH = 1500
+# Decision 1.439 (24/10): every trakt_related_synced_at stamp older than this
+# moment was written by the wrong /related path (our tmdb_id in Trakt's id
+# slot), so the server's queue hands those titles back. A run must start after
+# it, or its own stamps would never leave the queue (the startup guard).
+TRAKT_RELATED_FIX_DATE = "2026-10-24T16:00:00Z"
+# PostgREST trims every response to 1,000 rows, the RPC's included (B3).
+RELATED_SLICE = 1000
 PAGE_LIMIT = 100  # Trakt's page size per request for list endpoints
 
 _TITLE_KEY = {"movie": "movie", "tv": "show"}
@@ -192,68 +205,164 @@ def _run_phase_a(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, top
 
 
 def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, batch_size: int) -> dict:
-    # scanned: titles taken from the queue. resolved / unresolved: the outcome
-    # of the Trakt id lookup. errors: any title whose processing raised — a
-    # title can be resolved and then fail at /related or at the write.
-    stats = {"scanned": 0, "resolved": 0, "unresolved": 0, "related_rows": 0, "errors": 0}
+    # scanned: titles taken from the queue — attempts, in fact: a title that
+    # errors is not stamped, so a later slice of the same run serves it again
+    # and it is counted again. resolved / unresolved: the outcome of the Trakt
+    # id lookup. errors: any attempt that raised — a title can be resolved and
+    # then fail at /related or at the write.
+    # stuck_at: the media_id of a title this run stamped that the queue handed
+    # back (the stamps are not landing), or None.
+    stats = {"scanned": 0, "resolved": 0, "unresolved": 0, "related_rows": 0, "errors": 0,
+             "stuck_at": None}
 
-    batch = db.get_titles_for_related_drain(batch_size)
-    total = len(batch)
-    print(f"\n[TRAKT SYNC] Phase B: draining {total} title(s) with trakt_related_synced_at IS NULL...")
+    print(
+        f"\n[TRAKT SYNC] Phase B: draining up to {batch_size} title(s) from trakt_related_queue "
+        f"(never synced, or synced before {TRAKT_RELATED_FIX_DATE}), in slices of {RELATED_SLICE}..."
+    )
 
-    for i, row in enumerate(batch, start=1):
-        media_id = row["id"]
-        tmdb_id = row["tmdb_id"]
-        media_type = row["media_type"]
-        stats["scanned"] += 1
+    # SLICES (B3's lesson): PostgREST trims every response to 1,000 rows, so ask
+    # for at most RELATED_SLICE, process and stamp that slice, and ask AGAIN —
+    # each call recomputes the queue on the server, so the titles just stamped
+    # drop out — until the batch is filled or a slice comes back short.
+    attempted_this_run: set = set()  # every title drained this run
+    stamped_this_run: set = set()    # ...whose LAST drain ended in its stamp
+    drained_again: set = set()       # ...served again after a stamp: drained once more
+    while stats["scanned"] < batch_size:
+        want = min(batch_size - stats["scanned"], RELATED_SLICE)
+        rows = _fetch_related_slice(db, want)
+        if not rows:
+            break
+        # A title this run stamped, back in a new slice, is a stamp that failed
+        # quietly (stamp_trakt_related_synced logs and swallows a failed
+        # PATCH): drain it once more — replace + stamp is idempotent. A title
+        # that FAILED is not one: it was never stamped, so it rightly heads the
+        # next slice. (The brief's first form, the same first id in two
+        # slices, fired on that too — one title that always fails at the head
+        # would cut every run to one slice.)
+        # Stop at once, and say which, when the stamps are not landing:
+        #   - a FULL slice brings nothing this run has not tried, and some of
+        #     it was stamped (a thousand lost stamps is no hiccup), or
+        #   - a title comes back after its second stamp too.
+        # The loop ends on its own (scanned grows every pass); this bounds the
+        # waste and turns the run red. What it cannot see: a short slice is
+        # drained once more, so a queue smaller than a slice, or a last ask
+        # smaller than a slice (a batch between RELATED_SLICE and twice it),
+        # ends green even when no stamp lands. The schedule's 3,000 is three
+        # full asks.
+        repeats = [r for r in rows if r["id"] in stamped_this_run]
+        twice = next((r for r in repeats if r["id"] in drained_again), None)
+        nothing_new = len(rows) == RELATED_SLICE and all(r["id"] in attempted_this_run for r in rows)
+        if twice is not None or (repeats and nothing_new):
+            first = twice if twice is not None else repeats[0]
+            stats["stuck_at"] = first["id"]
+            what = ("came back after its second stamp" if twice is not None
+                    else "heads a full slice of titles this run already tried")
+            print(
+                f"[TRAKT SYNC] ERROR: media_id={first['id']} tmdb={first.get('tmdb_id')} «{first.get('title')}» "
+                f"{what} — the stamps are not landing; stopping."
+            )
+            break
+        for r in repeats:
+            drained_again.add(r["id"])
+            print(f"[TRAKT SYNC]   stamp did not land for media_id={r['id']} «{r.get('title')}» — draining it again")
 
-        try:
-            # B5: /related wants Trakt's own id; our tmdb_id there names
-            # another title. Resolve it first.
-            trakt_id = trakt.resolve_id(media_type, tmdb_id)
-            if trakt_id is None:
-                stats["unresolved"] += 1
-                kind = "show" if media_type == "tv" else "movie"
-                print(f"[TRAKT] unresolved tmdb={tmdb_id} type={kind} «{row.get('title')}»")
-                # Zero rows, so a stale row from the old path can never survive.
-                db.replace_media_related(media_id, [], run_start_iso)
-                db.stamp_trakt_related_synced(media_id, run_start_iso)
-                continue
-            stats["resolved"] += 1
-            items = trakt.get_related(media_type, trakt_id, limit=20)
-
-            related_rows = []
-            rank = 0
-            for item in items:
-                related_tmdb_id = (item.get("ids") or {}).get("tmdb")
-                if related_tmdb_id is None:
-                    continue
-                rank += 1
-                related_rows.append({
-                    "related_tmdb_id": related_tmdb_id,
-                    "related_media_type": media_type,
-                    "rank": rank,
-                })
-
-            db.replace_media_related(media_id, related_rows, run_start_iso)
-            db.stamp_trakt_related_synced(media_id, run_start_iso)
-
-            stats["related_rows"] += len(related_rows)
-
-            if i % 100 == 0:
-                print(f"[TRAKT SYNC]   progress: {i}/{total} scanned")
-        except Exception as exc:
-            print(f"[TRAKT SYNC]   tmdb_id={tmdb_id}: related drain failed — {exc}")
-            stats["errors"] += 1
+        for row in rows:
+            attempted_this_run.add(row["id"])
+            if _drain_one(trakt, db, run_start_iso, row, stats):
+                stamped_this_run.add(row["id"])
+            else:
+                stamped_this_run.discard(row["id"])  # its last drain failed: not stamped
+            if stats["scanned"] % 100 == 0:
+                print(f"[TRAKT SYNC]   progress: {stats['scanned']}/{batch_size} scanned")
+        if len(rows) < want:
+            break  # the queue is exhausted
 
     return stats
 
 
-def main() -> None:
+def _fetch_related_slice(db: SupabaseClient, want: int) -> list[dict]:
+    """One slice of the queue. FAILS FAST if the server has no
+    trakt_related_queue (PGRST202, "Could not find the function"): one line
+    naming the migration, exit 1, nothing stamped — B3's fetch_queue shape."""
+    try:
+        return db.get_titles_for_related_drain(want, TRAKT_RELATED_FIX_DATE)
+    except Exception as exc:
+        if getattr(exc, "code", None) == "PGRST202" or "Could not find the function" in str(
+            getattr(exc, "message", None) or exc
+        ):
+            print(
+                "[TRAKT SYNC] ERROR: the server has no public.trakt_related_queue — apply migration "
+                "20261024210000 before this code runs."
+            )
+            sys.exit(1)
+        raise
+
+
+def _drain_one(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, row: dict, stats: dict) -> bool:
+    """One title of Phase B: resolve its Trakt id, fetch /related, replace,
+    stamp. Returns True when the title was stamped, False when it failed."""
+    media_id = row["id"]
+    tmdb_id = row["tmdb_id"]
+    media_type = row["media_type"]
+    stats["scanned"] += 1
+
+    try:
+        # B5: /related wants Trakt's own id; our tmdb_id there names
+        # another title. Resolve it first.
+        trakt_id = trakt.resolve_id(media_type, tmdb_id)
+        if trakt_id is None:
+            stats["unresolved"] += 1
+            kind = "show" if media_type == "tv" else "movie"
+            print(f"[TRAKT] unresolved tmdb={tmdb_id} type={kind} «{row.get('title')}»")
+            # Zero rows, so a stale row from the old path can never survive.
+            db.replace_media_related(media_id, [], run_start_iso)
+            db.stamp_trakt_related_synced(media_id, run_start_iso)
+            return True
+        stats["resolved"] += 1
+        items = trakt.get_related(media_type, trakt_id, limit=20)
+
+        related_rows = []
+        rank = 0
+        for item in items:
+            related_tmdb_id = (item.get("ids") or {}).get("tmdb")
+            if related_tmdb_id is None:
+                continue
+            rank += 1
+            related_rows.append({
+                "related_tmdb_id": related_tmdb_id,
+                "related_media_type": media_type,
+                "rank": rank,
+            })
+
+        db.replace_media_related(media_id, related_rows, run_start_iso)
+        db.stamp_trakt_related_synced(media_id, run_start_iso)
+
+        stats["related_rows"] += len(related_rows)
+        return True
+    except Exception as exc:
+        print(f"[TRAKT SYNC]   tmdb_id={tmdb_id}: related drain failed — {exc}")
+        stats["errors"] += 1
+        return False
+
+
+def main(clock=None) -> None:
+    """*clock* returns the run's start instant (aware UTC); injected by tests,
+    the real clock otherwise."""
     print("[TRAKT SYNC] Starting weekly Trakt sync (shadow mode)...")
     config = load_env()
 
-    run_start_iso = datetime.now(timezone.utc).isoformat()
+    now = clock() if clock is not None else datetime.now(timezone.utc)
+    fix_date = datetime.fromisoformat(TRAKT_RELATED_FIX_DATE.replace("Z", "+00:00"))
+    if now <= fix_date:
+        # A stamp before the fix date counts as unsynced on the server (strict
+        # <): this run's stamps would never leave trakt_related_queue. The
+        # guard also refuses the instant itself.
+        print(
+            f"[TRAKT SYNC] ERROR: this run starts at {now.isoformat()}, not after the fix date "
+            f"{TRAKT_RELATED_FIX_DATE} — its stamps would never leave trakt_related_queue; stopping."
+        )
+        sys.exit(1)
+    run_start_iso = now.isoformat()
     top_n = int(os.environ.get("TRAKT_TOP_N", DEFAULT_TRAKT_TOP_N))
     related_batch = int(os.environ.get("TRAKT_RELATED_BATCH", DEFAULT_TRAKT_RELATED_BATCH))
 
@@ -274,6 +383,8 @@ def main() -> None:
         f"api_calls~{phase_a['api_calls']} "
         f"unmatched_anticipated_sample={sample}"
     )
+    if phase_b.get("stuck_at"):
+        sys.exit(1)  # Phase B said why, above: the run is red, on purpose
 
 
 if __name__ == "__main__":

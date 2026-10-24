@@ -96,7 +96,10 @@ Expected schema (create once in the Supabase dashboard / migrations):
 
 import math
 import os
+import time
 from datetime import date, datetime, timedelta, timezone
+
+import httpx  # supabase's own transport (installed with it): its errors are the dropped-connection class
 
 from supabase import create_client, Client
 
@@ -215,6 +218,16 @@ def _dedupe_credit_rows(rows: list[dict]) -> list[dict]:
         if key not in best or _richness(row) < _richness(best[key]):
             best[key] = row
     return list(best.values())
+
+
+# The trakt_related_queue RPC's retry (B5, B3.1's rule for fetch_queue): three
+# attempts, 2 s then 4 s apart, on a transient failure only — see
+# get_titles_for_related_drain's docstring.
+_RPC_ATTEMPTS = 3
+_RPC_RETRY_DELAYS = (2, 4)
+_TRANSIENT_RPC_CODES = {"503", "520", "521", "522", "523", "524",
+                        "PGRST000", "PGRST001", "PGRST002", "PGRST003"}
+_TRANSIENT_RPC_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 
 
 class SupabaseClient:
@@ -836,45 +849,55 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error decaying stale trakt heat: {exc}")
 
-    def get_titles_for_related_drain(self, limit: int) -> list[dict]:
+    def get_titles_for_related_drain(self, limit: int, before_iso: str) -> list[dict]:
         """
-        Return up to *limit* media rows (id, tmdb_id, media_type) where
-        trakt_related_synced_at IS NULL, ordered by popularity desc — the
-        state-driven drain queue for sync_trakt.py's related-titles phase.
+        One slice of sync_trakt.py's related-drain queue, from the server:
+        public.trakt_related_queue(p_limit, p_before) — migration
+        20261024210000 — rows (id, tmdb_id, media_type, title, popularity)
+        with tmdb_missing_at IS NULL, never stamped OR stamped before
+        *before_iso* (strict <; the fix date: every older stamp came from the
+        wrong /related path), in the app's order —
+        in US theatres, then inside a home-rail universe, then popularity,
+        then newest; capped at 10,000 on the server.
 
-        NOTE: PostgREST caps any single response at ~1000 rows regardless of
-        the .limit() requested, so a plain .limit(4000) silently returns only
-        1000 (the reason a bumped TRAKT_RELATED_BATCH appeared to do nothing).
-        Page through with .range() in <=1000-row chunks until *limit* rows are
-        collected or the NULL queue is exhausted. Safe because this method only
-        reads — the drain loop stamps trakt_related_synced_at afterward — so
-        the filtered set is stable across pages within one call. The secondary
-        .order("id") makes the page boundaries deterministic under popularity
-        ties/nulls.
+        One call is ONE slice. PostgREST trims every response to 1,000 rows,
+        the RPC's included, so the caller asks for at most 1,000 and asks
+        again after stamping — each call recomputes the queue, so the titles
+        just stamped drop out.
+
+        A transient failure is retried, B3.1's rule for fetch_queue: a 5xx
+        from PostgREST or Cloudflare (503, 520–524 as APIError.code; PostgREST's
+        own PGRST000–PGRST003) or a dropped/timed-out connection (httpx's
+        TimeoutException, NetworkError, RemoteProtocolError) — three attempts,
+        2 s then 4 s apart. The function is STABLE and has no side effects, so
+        a retry is safe. Anything else propagates at once, PGRST202 included:
+        sync_trakt turns a missing function into its fail-fast.
+
+        (This used to page the table itself with .range() in <=1000-row
+        chunks — trakt_related_synced_at IS NULL, tmdb_missing_at IS NULL,
+        popularity desc — which never returned to titles stamped by the wrong
+        path, and drained in an order the app does not show. B5 replaced it.)
         """
-        PAGE = 1000
-        rows: list[dict] = []
-        offset = 0
-        while len(rows) < limit:
-            want = min(PAGE, limit - len(rows))
-            page = (
-                self.client.table("media")
-                .select("id, tmdb_id, media_type, title")
-                .is_("trakt_related_synced_at", "null")
-                .is_("tmdb_missing_at", "null")
-                .order("popularity", desc=True)
-                .order("id")
-                .range(offset, offset + want - 1)
-                .execute()
-                .data or []
-            )
-            if not page:
-                break
-            rows.extend(page)
-            if len(page) < want:
-                break  # queue exhausted
-            offset += len(page)
-        return rows
+        for attempt in range(1, _RPC_ATTEMPTS + 1):
+            try:
+                return (
+                    self.client.rpc("trakt_related_queue", {"p_limit": limit, "p_before": before_iso})
+                    .execute()
+                    .data or []
+                )
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                transient = isinstance(exc, _TRANSIENT_RPC_ERRORS) or str(code) in _TRANSIENT_RPC_CODES
+                if not transient or attempt >= _RPC_ATTEMPTS:
+                    raise
+                delay = _RPC_RETRY_DELAYS[attempt - 1]
+                message = str(getattr(exc, "message", None) or exc)
+                detail = f"{message[:200]} (code {code})" if code is not None else message[:200]
+                print(
+                    f"[Supabase] trakt_related_queue RPC failed (attempt {attempt} of {_RPC_ATTEMPTS}): "
+                    f"{type(exc).__name__}: {detail} — retrying in {delay} s"
+                )
+                time.sleep(delay)
 
     def replace_media_related(self, media_id_uuid: str, rows: list[dict], synced_at_iso: str) -> None:
         """
