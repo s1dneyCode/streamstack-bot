@@ -986,50 +986,6 @@ class SupabaseClient:
             .data
         )
 
-    def replace_media_related(self, media_id_uuid: str, rows: list[dict], synced_at_iso: str) -> None:
-        """
-        Replace all media_related rows for *media_id_uuid* with *rows* — a
-        delete-then-insert so titles that drop out of Trakt's related list
-        don't linger. Deletes even when *rows* is empty, so a title with
-        zero current related results still correctly clears out stale rows
-        from a prior sync.
-
-        *rows* items must contain: related_tmdb_id, related_media_type,
-        rank; source='trakt' and synced_at=synced_at_iso are added here.
-
-        Raises on failure (unlike most narrow updates in this module) —
-        the caller (sync_trakt.py) must not stamp trakt_related_synced_at
-        for a title whose replace didn't actually succeed, or it would
-        never be retried.
-        """
-        try:
-            self.client.table("media_related").delete().eq("media_id", media_id_uuid).execute()
-            if rows:
-                payload = [
-                    {
-                        "media_id": media_id_uuid,
-                        "related_tmdb_id": r["related_tmdb_id"],
-                        "related_media_type": r["related_media_type"],
-                        "rank": r["rank"],
-                        "source": "trakt",
-                        "synced_at": synced_at_iso,
-                    }
-                    for r in rows
-                ]
-                self.client.table("media_related").insert(payload).execute()
-        except Exception as exc:
-            print(f"[Supabase] Error replacing media_related for media_id={media_id_uuid}: {exc}")
-            raise
-
-    def stamp_trakt_related_synced(self, media_id_uuid: str, synced_at_iso: str) -> None:
-        """Set trakt_related_synced_at on the media row by internal id."""
-        try:
-            self.client.table("media").update(
-                {"trakt_related_synced_at": synced_at_iso}
-            ).eq("id", media_id_uuid).execute()
-        except Exception as exc:
-            print(f"[Supabase] Error stamping trakt_related_synced_at for media_id={media_id_uuid}: {exc}")
-
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
