@@ -43,6 +43,11 @@ _MEDIA_TYPE_PATH = {"movie": "movies", "tv": "shows"}
 _SEARCH_TYPE = {"movie": "movie", "tv": "show"}  # Trakt's ?type= and result key
 
 
+def _header_names(response: requests.Response) -> list[str]:
+    """A response's header NAMES, sorted — never their values."""
+    return sorted(response.headers.keys(), key=str.lower)
+
+
 def load_env() -> dict[str, str]:
     required = ["TRAKT_CLIENT_ID"]
     config: dict[str, str] = {}
@@ -58,9 +63,11 @@ def load_env() -> dict[str, str]:
 class TraktClient:
     """Thin wrapper around the Trakt REST API v2."""
 
-    def __init__(self, client_id: str, clock=None) -> None:
+    def __init__(self, client_id: str, clock=None, monotonic=None) -> None:
         """*clock* returns the current instant (aware UTC) for the pause
-        before Trakt's wall; injected by tests, the real clock otherwise."""
+        before Trakt's wall; *monotonic* returns seconds for measuring the
+        wall between 429s. Both are injected by tests; the real clocks
+        otherwise."""
         self.client_id = client_id
         self._headers = {
             "trakt-api-key": client_id,
@@ -76,6 +83,21 @@ class TraktClient:
         self._header_warned = False
         self._pauses = 0
         self._429s = 0
+        # The wall, measured (B5.2): Trakt sends this client no X-Ratelimit
+        # (run #26), so every 429 says how many requests, and how many
+        # monotonic seconds, it took since the previous one.
+        self._monotonic = monotonic if monotonic is not None else (lambda: time.monotonic())
+        self._requests = 0                     # requests sent, every attempt
+        self._first_sent: float | None = None  # monotonic time of the first one
+        self._last_429_at: float | None = None
+        self._requests_at_last_429 = 0
+        self._walls: list[int] = []            # requests between two 429s (the first: since the start)
+        self._responses = 0
+
+    def wall_estimate(self) -> int | None:
+        """The fewest requests this run made between two 429s (the first
+        counted from the start), or None when no 429 came."""
+        return min(self._walls) if self._walls else None
 
     def rate_limit_summary(self) -> str:
         """For the SUMMARY line: Trakt's window as its first header named it,
@@ -124,10 +146,18 @@ class TraktClient:
             self._pause_before_the_wall()
             self._limiter.acquire()
             try:
+                sent_at = self._monotonic()
+                self._requests += 1
+                if self._first_sent is None:
+                    self._first_sent = sent_at
                 response = requests.get(url, headers=self._headers, params=params or {}, timeout=15)
+                self._responses += 1
+                if self._responses == 1:
+                    print(f"[TRAKT] First response headers: {_header_names(response)}")
                 self._read_rate_limit(response)
                 if response.status_code == 429:
                     self._429s += 1
+                    self._measure_429(response, sent_at)
                     retry_after = response.headers.get("Retry-After")
                     wait = float(retry_after) if retry_after else 2.0
                     print(f"[TRAKT] Rate limited (429, attempt {attempt}/{retries}) — waiting {wait}s...")
@@ -150,6 +180,22 @@ class TraktClient:
                     time.sleep(2)
 
         raise last_exc  # type: ignore[misc]
+
+    def _measure_429(self, response: requests.Response, sent_at: float) -> None:
+        """One line per 429: requests since the start and since the previous
+        429, the monotonic seconds between them, the Retry-After and the
+        response's header NAMES — the only values printed are Retry-After's
+        (and X-Ratelimit's, by _read_rate_limit)."""
+        since_previous = self._requests - self._requests_at_last_429
+        mark = self._last_429_at if self._last_429_at is not None else self._first_sent
+        seconds = sent_at - mark
+        self._walls.append(since_previous)
+        self._requests_at_last_429, self._last_429_at = self._requests, sent_at
+        print(
+            f"[TRAKT] 429 #{self._429s} — requests since start={self._requests}, "
+            f"since previous 429={since_previous} over {seconds:.1f} s (monotonic), "
+            f"Retry-After={response.headers.get('Retry-After') or '-'}, headers={_header_names(response)}"
+        )
 
     def _read_rate_limit(self, response: requests.Response) -> None:
         """Parse X-Ratelimit — JSON like {"name": "UNAUTHED_API_GET_LIMIT",

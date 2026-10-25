@@ -86,7 +86,8 @@ def _client(router: _Router, clock=None):
             mock.patch.object(trakt_mod.requests, "get", router), \
             mock.patch.object(trakt_mod.time, "sleep", sleeps.append), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-        client = trakt_mod.TraktClient(client_id="fake-trakt-client-id", clock=clock)
+        # monotonic: a fixed fake (B5.2), so no test reads the real clock.
+        client = trakt_mod.TraktClient(client_id="fake-trakt-client-id", clock=clock, monotonic=lambda: 0.0)
         client._limiter = types.SimpleNamespace(acquire=lambda: None)
         client.out = out
         client.sleeps = sleeps

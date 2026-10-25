@@ -196,12 +196,15 @@ class RateLimitHeaderTest(unittest.TestCase):
                                ("no remaining", [(200, [], {"X-Ratelimit": json.dumps({"limit": 1000})})])):
             with self.subTest(header=label):
                 client, sleeps, out = _three_requests(answers)
-                self.assertEqual(out.count("X-Ratelimit"), 1)  # three responses, one line
+                # Three responses, one line about the header. (Since B5.2 the
+                # first response's header NAMES are printed too, so the needle
+                # is the log line, not the bare name.)
+                self.assertEqual(out.count("X-Ratelimit header"), 1)
                 self.assertEqual(sleeps, [])
                 self.assertIn("trakt_limit=unknown", client.rate_limit_summary())
         # Control: a well-formed header is read, and nothing is logged about it.
         client, _, out = _three_requests([(200, [], _limit(999))])
-        self.assertNotIn("X-Ratelimit", out)
+        self.assertNotIn("X-Ratelimit header", out)
         self.assertIn("trakt_limit=1000/300s", client.rate_limit_summary())
 
     def test_the_summary_names_the_first_limit_and_counts_pauses_and_429s(self):
