@@ -470,18 +470,37 @@ FAKE_ENV = {"TRAKT_CLIENT_ID": "fake-trakt-client-id", "SUPABASE_URL": "https://
 PHASE_A = {"updated": 4, "type_mismatches": 0, "unmatched_anticipated_ids": [], "api_calls": 18}
 
 
-def _main(now: datetime, phase_b_stats=None):
+COUNTERS = {"scanned": 5, "resolved": 3, "unresolved": 2, "related_rows": 40, "errors": 0,
+            "related_by_imdb": 0, "related_by_tmdb": 5, "stuck_at": None, "queue_failed": None}
+
+
+def _main(now: datetime, phase_b_stats=None, env=None, seen=None):
+    """sync_trakt.main with fake clients and phases. *seen* (a dict), when
+    given, receives the keywords main handed TraktClient and Phase B."""
     calls = []
-    phase_b = phase_b_stats or {"scanned": 5, "resolved": 3, "unresolved": 2, "related_rows": 40,
-                                "errors": 0, "stuck_at": None}
+    seen = seen if seen is not None else {}
+    phase_b = {**COUNTERS, **(phase_b_stats or {})}
+    trakt = types.SimpleNamespace(rate_limit_summary=lambda: "trakt_limit=1000/300s trakt_pauses=1 trakt_429=0")
+
+    def fake_trakt(**kw):
+        seen["trakt"] = kw
+        return trakt
+
+    def fake_phase_b(*a, **kw):
+        seen["phase_b"] = kw
+        calls.append(("B",) + a[2:])
+        return phase_b
+
     out = io.StringIO()
     code = None
-    with mock.patch.dict(os.environ, FAKE_ENV), \
-            mock.patch.object(sync_trakt, "TraktClient", lambda **kw: object()), \
+    with mock.patch.dict(os.environ, {**FAKE_ENV, **{k: v for k, v in (env or {}).items() if v is not None}}), \
+            mock.patch.object(sync_trakt, "TraktClient", fake_trakt), \
             mock.patch.object(sync_trakt, "SupabaseClient", lambda **kw: object()), \
             mock.patch.object(sync_trakt, "_run_phase_a", lambda *a: calls.append("A") or PHASE_A), \
-            mock.patch.object(sync_trakt, "_run_phase_b", lambda *a: calls.append(("B",) + a[2:]) or phase_b), \
+            mock.patch.object(sync_trakt, "_run_phase_b", fake_phase_b), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        for key in [k for k, v in (env or {}).items() if v is None]:
+            os.environ.pop(key, None)  # env={KEY: None} means "not set"
         try:
             sync_trakt.main(clock=lambda: now)
         except SystemExit as exc:

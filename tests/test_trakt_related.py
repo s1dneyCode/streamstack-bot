@@ -29,12 +29,13 @@ BASE = "https://api.trakt.invalid"
 RUN = "2026-10-25T03:00:00+00:00"
 
 
-def _response(status: int, body, url: str) -> requests.Response:
+def _response(status: int, body, url: str, headers: dict | None = None) -> requests.Response:
     r = requests.Response()
     r.status_code = status
     r._content = json.dumps(body).encode("utf-8")
     r.url = url
     r.headers["Content-Type"] = "application/json"
+    r.headers.update(headers or {})
     return r
 
 
@@ -47,7 +48,9 @@ class _Router:
     """Stands in for requests.get: answers by path, records (path, params)."""
 
     def __init__(self, routes: dict):
-        self.routes = routes  # path -> (status, body), or a list of them (one per call)
+        # path -> (status, body) or (status, body, response headers), or a
+        # list of them (one per call; the last one repeats)
+        self.routes = routes
         self.calls = []
 
     def __call__(self, url, headers=None, params=None, timeout=None):
@@ -56,24 +59,37 @@ class _Router:
         answer = self.routes.get(path, (404, {"error": "not found"}))
         if isinstance(answer, list):
             answer = answer.pop(0) if len(answer) > 1 else answer[0]
-        status, body = answer
-        return _response(status, body, url)
+        status, body, *rest = answer
+        return _response(status, body, url, rest[0] if rest else None)
 
     def paths(self):
         return [p for p, _ in self.calls]
 
 
+class _NoLimiter:
+    """The token bucket, inert: building it reads no clock, acquiring never waits."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def acquire(self):
+        pass
+
+
 @contextlib.contextmanager
-def _client(router: _Router):
-    """A real TraktClient whose HTTP, limiter and sleeps are fakes."""
-    out = io.StringIO()
+def _client(router: _Router, clock=None):
+    """A real TraktClient whose HTTP, limiter, sleeps and clock are fakes;
+    client.sleeps records every sleep it asked for."""
+    out, sleeps = io.StringIO(), []
     with mock.patch.object(trakt_mod, "TRAKT_BASE", BASE), \
+            mock.patch.object(trakt_mod, "RateLimiter", _NoLimiter), \
             mock.patch.object(trakt_mod.requests, "get", router), \
-            mock.patch.object(trakt_mod.time, "sleep", lambda s: None), \
+            mock.patch.object(trakt_mod.time, "sleep", sleeps.append), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-        client = trakt_mod.TraktClient(client_id="fake-trakt-client-id")
+        client = trakt_mod.TraktClient(client_id="fake-trakt-client-id", clock=clock)
         client._limiter = types.SimpleNamespace(acquire=lambda: None)
         client.out = out
+        client.sleeps = sleeps
         yield client
 
 

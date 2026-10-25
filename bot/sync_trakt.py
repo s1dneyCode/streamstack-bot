@@ -49,8 +49,11 @@ Run via:
 """
 
 import os
+import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+import requests
 
 from .trakt import TraktClient
 from .supabase_client import SupabaseClient, is_missing_function
@@ -64,6 +67,13 @@ DEFAULT_TRAKT_RELATED_BATCH = 1500
 TRAKT_RELATED_FIX_DATE = "2026-10-24T16:00:00Z"
 # PostgREST trims every response to 1,000 rows, the RPC's included (B3).
 RELATED_SLICE = 1000
+# Phase B stops before the next title or slice once this many minutes have
+# passed since the run's start (B5.1) — inside the job's timeout-minutes 90,
+# so a run ends with its SUMMARY instead of being killed mid-title.
+DEFAULT_TRAKT_TIME_BUDGET_MIN = 80
+# A well-formed IMDB id: Trakt's /related takes it in the id slot, so a title
+# that has one costs one Trakt call instead of resolve + /related (B5.1).
+_IMDB_ID = re.compile(r"tt\d+")
 PAGE_LIMIT = 100  # Trakt's page size per request for list endpoints
 
 _TITLE_KEY = {"movie": "movie", "tv": "show"}
@@ -210,17 +220,35 @@ def _run_phase_a(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, top
     return stats
 
 
-def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, batch_size: int) -> dict:
+def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, batch_size: int,
+                 deadline: datetime | None = None, clock=None, budget_min: int | None = None) -> dict:
+    """*deadline* (aware UTC) is the time budget's end, read on *clock* —
+    both from main, injected by tests; None means no budget."""
     # scanned: titles taken from the queue — attempts, in fact: a title that
     # errors is not stamped, so a later slice of the same run serves it again
-    # and it is counted again. resolved / unresolved: the outcome of the Trakt
-    # id lookup. errors: any attempt that raised — a title can be resolved and
-    # then fail at /related or at the write.
+    # and it is counted again. related_by_imdb: titles whose /related Trakt
+    # answered by their IMDB id. related_by_tmdb: titles that took the resolve
+    # path instead (no usable imdb_id, or one Trakt does not know), resolved
+    # or not. resolved / unresolved: the outcome of that path's lookup.
+    # errors: any attempt that raised — at /related, the lookup or the write.
     # stuck_at: the media_id of a title this run stamped that the queue handed
     # back (the stamps are not landing), or None. queue_failed: what a slice
     # that failed for good raised (after the client's retries), or None.
+    # budget_reached: the time budget stopped the drain (a plan, not a failure).
     stats = {"scanned": 0, "resolved": 0, "unresolved": 0, "related_rows": 0, "errors": 0,
-             "stuck_at": None, "queue_failed": None}
+             "related_by_imdb": 0, "related_by_tmdb": 0,
+             "stuck_at": None, "queue_failed": None, "budget_reached": False}
+    now = clock if clock is not None else (lambda: datetime.now(timezone.utc))
+
+    def out_of_time() -> bool:
+        if deadline is None or now() < deadline:
+            return False
+        stats["budget_reached"] = True
+        print(
+            f"[TRAKT SYNC] time budget of {budget_min} min reached after {stats['scanned']} title(s) — "
+            "stopping this run's drain; the rest waits for the next run"
+        )
+        return True
 
     print(
         f"\n[TRAKT SYNC] Phase B: draining up to {batch_size} title(s) from trakt_related_queue "
@@ -235,6 +263,8 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
     stamped_this_run: set = set()    # ...whose LAST drain ended in its stamp
     drained_again: set = set()       # ...served again after a stamp: drained once more
     while stats["scanned"] < batch_size:
+        if out_of_time():
+            break
         want = min(batch_size - stats["scanned"], RELATED_SLICE)
         try:
             rows = _fetch_related_slice(db, want)
@@ -284,6 +314,8 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
             print(f"[TRAKT SYNC]   stamp did not land for media_id={r['id']} «{r.get('title')}» — draining it again")
 
         for row in rows:
+            if out_of_time():
+                break
             attempted_this_run.add(row["id"])
             if _drain_one(trakt, db, run_start_iso, row, stats):
                 stamped_this_run.add(row["id"])
@@ -291,8 +323,8 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
                 stamped_this_run.discard(row["id"])  # its last drain failed: not stamped
             if stats["scanned"] % 100 == 0:
                 print(f"[TRAKT SYNC]   progress: {stats['scanned']}/{batch_size} scanned")
-        if len(rows) < want:
-            break  # the queue is exhausted
+        if stats["budget_reached"] or len(rows) < want:
+            break  # out of time, or the queue is exhausted
 
     return stats
 
@@ -329,28 +361,53 @@ def _write_related(db: SupabaseClient, media_id: str, rows: list[dict], run_star
         raise
 
 
+def _related_by_imdb(trakt: TraktClient, media_type: str, imdb_id: str) -> list[dict] | None:
+    """/related by IMDB id; None when Trakt answers 404 for it (it does not
+    know that IMDB id), so the caller falls back to the resolve path. Any
+    other error propagates: an error, never a fallback."""
+    try:
+        return trakt.get_related(media_type, imdb_id, limit=20)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            return None
+        raise
+
+
 def _drain_one(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, row: dict, stats: dict) -> bool:
-    """One title of Phase B: resolve its Trakt id, fetch /related, write its
-    rows and stamp in one RPC. Returns True when the title was stamped, False
-    when it failed."""
+    """One title of Phase B: /related by its IMDB id, or by the Trakt id
+    resolved from its tmdb_id; then its rows and stamp in one RPC. Returns
+    True when the title was stamped, False when it failed."""
     media_id = row["id"]
     tmdb_id = row["tmdb_id"]
     media_type = row["media_type"]
     stats["scanned"] += 1
 
     try:
-        # B5: /related wants Trakt's own id; our tmdb_id there names
-        # another title. Resolve it first.
-        trakt_id = trakt.resolve_id(media_type, tmdb_id)
-        if trakt_id is None:
-            stats["unresolved"] += 1
-            kind = "show" if media_type == "tv" else "movie"
-            print(f"[TRAKT] unresolved tmdb={tmdb_id} type={kind} «{row.get('title')}»")
-            # Zero rows, so a stale row from the old path can never survive.
-            _write_related(db, media_id, [], run_start_iso)
-            return True
-        stats["resolved"] += 1
-        items = trakt.get_related(media_type, trakt_id, limit=20)
+        # B5.1: /related takes an IMDB id in the same slot as Trakt's own id,
+        # so a title the queue serves with a well-formed one is asked by it —
+        # one call, no lookup. (A server still on B5's queue has no imdb_id
+        # column: .get reads None, and the title takes the resolve path.)
+        items = None
+        imdb_id = row.get("imdb_id")
+        if isinstance(imdb_id, str) and _IMDB_ID.fullmatch(imdb_id):
+            items = _related_by_imdb(trakt, media_type, imdb_id)
+            if items is not None:
+                stats["related_by_imdb"] += 1
+        if items is None:
+            # B5: /related wants Trakt's own id; our tmdb_id there names
+            # another title. Resolve it first — with no usable imdb_id, or one
+            # Trakt answered 404 for.
+            stats["related_by_tmdb"] += 1
+            trakt_id = trakt.resolve_id(media_type, tmdb_id)
+            if trakt_id is None:
+                stats["unresolved"] += 1
+                kind = "show" if media_type == "tv" else "movie"
+                print(f"[TRAKT] unresolved tmdb={tmdb_id} type={kind} «{row.get('title')}»")
+                # Zero rows, so a stale row from the old path can never survive.
+                _write_related(db, media_id, [], run_start_iso)
+                return True
+            stats["resolved"] += 1
+            items = trakt.get_related(media_type, trakt_id, limit=20)
 
         related_rows = []
         rank = 0
@@ -374,12 +431,14 @@ def _drain_one(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, row: 
 
 
 def main(clock=None) -> None:
-    """*clock* returns the run's start instant (aware UTC); injected by tests,
-    the real clock otherwise."""
+    """*clock* returns the current instant (aware UTC) — the run's start, the
+    time budget's checks and the client's pause all read it; injected by
+    tests, the real clock otherwise."""
     print("[TRAKT SYNC] Starting weekly Trakt sync (shadow mode)...")
     config = load_env()
 
-    now = clock() if clock is not None else datetime.now(timezone.utc)
+    clock = clock if clock is not None else (lambda: datetime.now(timezone.utc))
+    now = clock()
     fix_date = datetime.fromisoformat(TRAKT_RELATED_FIX_DATE.replace("Z", "+00:00"))
     if now <= fix_date:
         # A stamp before the fix date counts as unsynced on the server (strict
@@ -393,12 +452,15 @@ def main(clock=None) -> None:
     run_start_iso = now.isoformat()
     top_n = int(os.environ.get("TRAKT_TOP_N", DEFAULT_TRAKT_TOP_N))
     related_batch = int(os.environ.get("TRAKT_RELATED_BATCH", DEFAULT_TRAKT_RELATED_BATCH))
+    budget_min = int(os.environ.get("TRAKT_TIME_BUDGET_MIN", DEFAULT_TRAKT_TIME_BUDGET_MIN))
+    deadline = now + timedelta(minutes=budget_min)
 
-    trakt = TraktClient(client_id=config["TRAKT_CLIENT_ID"])
+    trakt = TraktClient(client_id=config["TRAKT_CLIENT_ID"], clock=clock)
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
     phase_a = _run_phase_a(trakt, db, run_start_iso, top_n)
-    phase_b = _run_phase_b(trakt, db, run_start_iso, related_batch)
+    phase_b = _run_phase_b(trakt, db, run_start_iso, related_batch,
+                           deadline=deadline, clock=clock, budget_min=budget_min)
 
     sample = phase_a["unmatched_anticipated_ids"][:10]
     print(
@@ -408,7 +470,9 @@ def main(clock=None) -> None:
         f"related_scanned={phase_b['scanned']} related_resolved={phase_b['resolved']} "
         f"related_unresolved={phase_b['unresolved']} related_rows={phase_b['related_rows']} "
         f"related_errors={phase_b['errors']} "
+        f"related_by_imdb={phase_b['related_by_imdb']} related_by_tmdb={phase_b['related_by_tmdb']} "
         f"api_calls~{phase_a['api_calls']} "
+        f"{trakt.rate_limit_summary()} "
         f"unmatched_anticipated_sample={sample}"
     )
     if phase_b.get("stuck_at") or phase_b.get("queue_failed"):
