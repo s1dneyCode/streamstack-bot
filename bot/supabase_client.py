@@ -91,7 +91,9 @@ Expected schema (create once in the Supabase dashboard / migrations):
         synced_at          timestamptz
         PRIMARY KEY (media_id, related_media_type, related_tmdb_id)
         -- Populated by sync_trakt.py Phase B, one full replace per title
-        -- (see SupabaseClient.replace_media_related) — never a partial update.
+        -- (see SupabaseClient.write_related: public.trakt_replace_related, the
+        -- rows and the title's trakt_related_synced_at in one transaction —
+        -- B5.1) — never a partial update.
 """
 
 import math
@@ -222,12 +224,34 @@ def _dedupe_credit_rows(rows: list[dict]) -> list[dict]:
 
 # The trakt_related_queue RPC's retry (B5, B3.1's rule for fetch_queue): three
 # attempts, 2 s then 4 s apart, on a transient failure only — see
-# get_titles_for_related_drain's docstring.
+# get_titles_for_related_drain's docstring. One code more than B3.1's set:
+# '57014', a statement cancelled by PostgREST's 8 s statement_timeout — the
+# server under load (B5.1: both drains of 24–25/10 died on it).
 _RPC_ATTEMPTS = 3
 _RPC_RETRY_DELAYS = (2, 4)
 _TRANSIENT_RPC_CODES = {"503", "520", "521", "522", "523", "524",
-                        "PGRST000", "PGRST001", "PGRST002", "PGRST003"}
+                        "PGRST000", "PGRST001", "PGRST002", "PGRST003", "57014"}
 _TRANSIENT_RPC_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+
+# Phase A's decay through public.trakt_decay_heat (B5.1): at most this many
+# rows a call — one row of media costs ~18 ms cold (35 indexes), and 619 rows
+# in one statement took 11 s, over PostgREST's 8 s — called again while a
+# call returns the full page, at most TRAKT_DECAY_MAX_CALLS times.
+TRAKT_DECAY_PAGE = 200
+TRAKT_DECAY_MAX_CALLS = 50
+
+
+def is_missing_function(exc: BaseException) -> bool:
+    """True when PostgREST says the RPC does not exist (PGRST202, "Could not
+    find the function"): the migration that creates it is not applied yet."""
+    return getattr(exc, "code", None) == "PGRST202" or "Could not find the function" in str(
+        getattr(exc, "message", None) or exc
+    )
+
+
+def _rpc_int(data) -> int:
+    """The integer a scalar RPC answers (postgrest hands it back as `data`)."""
+    return int(data) if isinstance(data, (int, float)) else 0
 
 
 class SupabaseClient:
@@ -826,39 +850,69 @@ class SupabaseClient:
         except Exception as exc:
             print(f"[Supabase] Error updating trakt list signals for tmdb_id={tmdb_id}: {exc}")
 
-    def decay_trakt_heat(self, run_start_iso: str) -> None:
+    def decay_trakt_heat(self, run_start_iso: str) -> tuple[int, int]:
         """
         Null out trakt_watchers_week, trakt_trending_rank, and
         trakt_anticipated_score on any row whose trakt_synced_at predates
         *run_start_iso* — i.e. it didn't appear on any Trakt list this run,
-        so its old heat numbers are stale. A row with trakt_synced_at IS
-        NULL (never synced) is correctly left alone: NULL < anything is
-        NULL, not true, in Postgres, so .lt() never matches it.
+        so its old heat numbers are stale. A row never synced (NULL) is left
+        alone. Returns (rows decayed, calls made).
+
+        Through public.trakt_decay_heat(p_before, p_limit) — migration
+        20261025160000 — which touches only rows that still carry one of the
+        three signals, at most p_limit of them a call, oldest stamp first.
+        Called again while a call returns TRAKT_DECAY_PAGE; at most
+        TRAKT_DECAY_MAX_CALLS calls (10,000 rows), a ceiling a day's lists
+        cannot reach (six lists of 300) — never an endless loop. (It used to
+        be one UPDATE over every row ever stamped, through a scan of media:
+        over PostgREST's 8 s on every run since the table grew, so titles
+        that fell off Trakt's lists kept their heat. B5.1 replaced it.)
+
+        A missing function propagates — sync_trakt fails fast on it, Phase A
+        fails loudly by design. Any other error is logged with what landed so
+        far and ends the loop: Phase B must still run.
 
         trakt_rating/trakt_vote_count (Trakt's all-time rating, not a
         weekly list-membership signal) are deliberately left untouched —
         falling off the weekly watched/trending/anticipated lists doesn't
         mean the rating became stale.
         """
-        try:
-            self.client.table("media").update({
-                "trakt_watchers_week": None,
-                "trakt_trending_rank": None,
-                "trakt_anticipated_score": None,
-            }).lt("trakt_synced_at", run_start_iso).execute()
-        except Exception as exc:
-            print(f"[Supabase] Error decaying stale trakt heat: {exc}")
+        decayed = calls = 0
+        while calls < TRAKT_DECAY_MAX_CALLS:
+            calls += 1
+            try:
+                n = _rpc_int(
+                    self.client.rpc("trakt_decay_heat", {"p_before": run_start_iso, "p_limit": TRAKT_DECAY_PAGE})
+                    .execute()
+                    .data
+                )
+            except Exception as exc:
+                if is_missing_function(exc):
+                    raise
+                print(
+                    f"[Supabase] Error decaying stale trakt heat after {decayed} title(s) in {calls} call(s): {exc}"
+                )
+                break
+            decayed += n
+            if n < TRAKT_DECAY_PAGE:
+                break
+        return decayed, calls
 
     def get_titles_for_related_drain(self, limit: int, before_iso: str) -> list[dict]:
         """
         One slice of sync_trakt.py's related-drain queue, from the server:
         public.trakt_related_queue(p_limit, p_before) — migration
-        20261024210000 — rows (id, tmdb_id, media_type, title, popularity)
-        with tmdb_missing_at IS NULL, never stamped OR stamped before
-        *before_iso* (strict <; the fix date: every older stamp came from the
-        wrong /related path), in the app's order —
-        in US theatres, then inside a home-rail universe, then popularity,
-        then newest; capped at 10,000 on the server.
+        20261024210000, recreated by 20261025160000 — six columns per row:
+        id, tmdb_id, imdb_id (nullable; absent on a server still on B5's
+        five-column form, so the caller reads it with .get), media_type,
+        title, popularity. Titles with tmdb_missing_at IS NULL, never stamped
+        OR stamped before *before_iso* (strict <; the fix date: every older
+        stamp came from the wrong /related path), in the app's order — in US
+        theatres, then inside a home-rail universe, then popularity, then
+        newest; capped at 10,000 on the server. Since 20261025160000 the
+        pending set is a partial index in that order: milliseconds a slice
+        (179 ms cold in the rehearsal) instead of B5's seq scan and sort
+        (2.5 s alone, past PostgREST's 8 s under the other jobs' load).
 
         One call is ONE slice. PostgREST trims every response to 1,000 rows,
         the RPC's included, so the caller asks for at most 1,000 and asks
@@ -867,11 +921,12 @@ class SupabaseClient:
 
         A transient failure is retried, B3.1's rule for fetch_queue: a 5xx
         from PostgREST or Cloudflare (503, 520–524 as APIError.code; PostgREST's
-        own PGRST000–PGRST003) or a dropped/timed-out connection (httpx's
-        TimeoutException, NetworkError, RemoteProtocolError) — three attempts,
-        2 s then 4 s apart. The function is STABLE and has no side effects, so
-        a retry is safe. Anything else propagates at once, PGRST202 included:
-        sync_trakt turns a missing function into its fail-fast.
+        own PGRST000–PGRST003), a statement cancelled by the 8 s timeout
+        (57014), or a dropped/timed-out connection (httpx's TimeoutException,
+        NetworkError, RemoteProtocolError) — three attempts, 2 s then 4 s
+        apart. The function is STABLE and has no side effects, so a retry is
+        safe. Anything else propagates at once, PGRST202 included: sync_trakt
+        turns a missing function into its fail-fast.
 
         (This used to page the table itself with .range() in <=1000-row
         chunks — trakt_related_synced_at IS NULL, tmdb_missing_at IS NULL,
@@ -898,6 +953,38 @@ class SupabaseClient:
                     f"{type(exc).__name__}: {detail} — retrying in {delay} s"
                 )
                 time.sleep(delay)
+
+    def write_related(self, media_id_uuid: str, rows: list[dict], synced_at_iso: str) -> int:
+        """
+        One title of the related drain, written whole: ONE call to
+        public.trakt_replace_related(p_media_id, p_rows, p_synced_at) —
+        migration 20261025160000 — which deletes the title's media_related
+        rows, inserts *rows* and stamps media.trakt_related_synced_at, in one
+        transaction. The stamp can no longer land without its rows, nor the
+        rows without the stamp (B5's DELETE + INSERT + PATCH could).
+
+        *rows* items carry exactly related_tmdb_id, related_media_type and
+        rank (the server adds source and synced_at); [] for a title with
+        none, which still stamps it. p_rows goes as a JSON array. Returns the
+        rows the server wrote — a title Trakt listed twice is one row.
+
+        Not retried: any error propagates (22023 bad input, P0002 no such
+        media row, a constraint's 23503/23514, PGRST202 when the function is
+        missing), so the caller counts it and the title stays unstamped —
+        the queue serves it again.
+        """
+        payload = [
+            {"related_tmdb_id": r["related_tmdb_id"], "related_media_type": r["related_media_type"], "rank": r["rank"]}
+            for r in rows
+        ]
+        return _rpc_int(
+            self.client.rpc(
+                "trakt_replace_related",
+                {"p_media_id": media_id_uuid, "p_rows": payload, "p_synced_at": synced_at_iso},
+            )
+            .execute()
+            .data
+        )
 
     def replace_media_related(self, media_id_uuid: str, rows: list[dict], synced_at_iso: str) -> None:
         """

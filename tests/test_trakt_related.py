@@ -78,22 +78,30 @@ def _client(router: _Router):
 
 
 class _FakeDb:
-    """sync_trakt's db: the queue, and records of every replace and stamp."""
+    """sync_trakt's db: the queue, and a record of every write_related — the
+    one RPC that replaces a title's rows AND stamps it (B5.1). `replaced` and
+    `stamped` are two views of those same calls, as B5's pins read them when
+    they were two round trips."""
 
     def __init__(self, rows):
         self.rows = rows
-        self.replaced = []  # (media_id, rows, synced_at)
-        self.stamped = []   # (media_id, synced_at)
+        self.written = []  # (media_id, rows, synced_at)
+
+    @property
+    def replaced(self):
+        return list(self.written)
+
+    @property
+    def stamped(self):
+        return [(m, s) for m, _, s in self.written]
 
     def get_titles_for_related_drain(self, limit, *args, **kwargs):
         done = {m for m, _ in self.stamped}
         return [r for r in self.rows if r["id"] not in done][:limit]
 
-    def replace_media_related(self, media_id, rows, synced_at):
-        self.replaced.append((media_id, rows, synced_at))
-
-    def stamp_trakt_related_synced(self, media_id, synced_at):
-        self.stamped.append((media_id, synced_at))
+    def write_related(self, media_id, rows, synced_at):
+        self.written.append((media_id, rows, synced_at))
+        return len(rows)
 
 
 def _row(media_id="m-1", tmdb_id=693134, media_type="movie", title="Dune: Part Two"):
@@ -232,8 +240,8 @@ class PhaseBTest(unittest.TestCase):
         # Zero rows are written BEFORE the stamp: a failed write must leave
         # the title in the queue, never stamped over a stale row.
         class _FailingReplace(_FakeDb):
-            def replace_media_related(self, media_id, rows, synced_at):
-                raise RuntimeError("delete failed")
+            def write_related(self, media_id, rows, synced_at):
+                raise RuntimeError("delete failed")  # the one transaction rolls back: no rows, no stamp
 
         router = _Router({"/search/tmdb/693134": (200, [])})
         db = _FailingReplace([_row()])

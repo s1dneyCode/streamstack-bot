@@ -53,7 +53,7 @@ import sys
 from datetime import datetime, timezone
 
 from .trakt import TraktClient
-from .supabase_client import SupabaseClient
+from .supabase_client import SupabaseClient, is_missing_function
 
 DEFAULT_TRAKT_TOP_N = 300
 DEFAULT_TRAKT_RELATED_BATCH = 1500
@@ -199,7 +199,13 @@ def _run_phase_a(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, top
             stats["updated"] += 1
 
     print("\n[TRAKT SYNC] Phase A: decaying stale heat (rows not refreshed this run)...")
-    db.decay_trakt_heat(run_start_iso)
+    try:
+        decayed, calls = db.decay_trakt_heat(run_start_iso)
+    except Exception as exc:
+        if is_missing_function(exc):
+            _fail_fast_missing("trakt_decay_heat", "20261025160000")
+        raise
+    print(f"[TRAKT SYNC]   decayed heat on {decayed} title(s) in {calls} call(s)")
 
     return stats
 
@@ -211,9 +217,10 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
     # id lookup. errors: any attempt that raised — a title can be resolved and
     # then fail at /related or at the write.
     # stuck_at: the media_id of a title this run stamped that the queue handed
-    # back (the stamps are not landing), or None.
+    # back (the stamps are not landing), or None. queue_failed: what a slice
+    # that failed for good raised (after the client's retries), or None.
     stats = {"scanned": 0, "resolved": 0, "unresolved": 0, "related_rows": 0, "errors": 0,
-             "stuck_at": None}
+             "stuck_at": None, "queue_failed": None}
 
     print(
         f"\n[TRAKT SYNC] Phase B: draining up to {batch_size} title(s) from trakt_related_queue "
@@ -229,16 +236,26 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
     drained_again: set = set()       # ...served again after a stamp: drained once more
     while stats["scanned"] < batch_size:
         want = min(batch_size - stats["scanned"], RELATED_SLICE)
-        rows = _fetch_related_slice(db, want)
+        try:
+            rows = _fetch_related_slice(db, want)
+        except Exception as exc:
+            # Failed for good — the client already retried what is transient
+            # (a missing function never gets here: it exits). What landed
+            # stays landed; main still prints the SUMMARY, then exits 1.
+            stats["queue_failed"] = f"{type(exc).__name__}: {exc}"
+            print(f"[TRAKT SYNC] ERROR: the queue slice failed — {exc}; stopping this run's drain with what landed")
+            break
         if not rows:
             break
-        # A title this run stamped, back in a new slice, is a stamp that failed
-        # quietly (stamp_trakt_related_synced logs and swallows a failed
-        # PATCH): drain it once more — replace + stamp is idempotent. A title
-        # that FAILED is not one: it was never stamped, so it rightly heads the
-        # next slice. (The brief's first form, the same first id in two
-        # slices, fired on that too — one title that always fails at the head
-        # would cut every run to one slice.)
+        # A title this run stamped, back in a new slice, is a stamp the queue
+        # does not see. Since B5.1 the rows and the stamp land in one
+        # transaction (trakt_replace_related), so it is no longer a PATCH
+        # swallowed on its own — it would be a stamp the queue reads as older
+        # than p_before, or a lagging read: drain it once more, the write is
+        # idempotent. A title that FAILED is not one: it was never stamped, so
+        # it rightly heads the next slice. (The brief's first form, the same
+        # first id in two slices, fired on that too — one title that always
+        # fails at the head would cut every run to one slice.)
         # Stop at once, and say which, when the stamps are not landing:
         #   - a FULL slice brings nothing this run has not tried, and some of
         #     it was stamped (a thousand lost stamps is no hiccup), or
@@ -280,6 +297,14 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
     return stats
 
 
+def _fail_fast_missing(function: str, migration: str) -> None:
+    """The server has no public.<function>: one line naming the migration
+    that creates it, exit 1 — B3's fetch_queue shape. The client never exits
+    the process; sync_trakt does, here."""
+    print(f"[TRAKT SYNC] ERROR: the server has no public.{function} — apply migration {migration} before this code runs.")
+    sys.exit(1)
+
+
 def _fetch_related_slice(db: SupabaseClient, want: int) -> list[dict]:
     """One slice of the queue. FAILS FAST if the server has no
     trakt_related_queue (PGRST202, "Could not find the function"): one line
@@ -287,20 +312,27 @@ def _fetch_related_slice(db: SupabaseClient, want: int) -> list[dict]:
     try:
         return db.get_titles_for_related_drain(want, TRAKT_RELATED_FIX_DATE)
     except Exception as exc:
-        if getattr(exc, "code", None) == "PGRST202" or "Could not find the function" in str(
-            getattr(exc, "message", None) or exc
-        ):
-            print(
-                "[TRAKT SYNC] ERROR: the server has no public.trakt_related_queue — apply migration "
-                "20261024210000 before this code runs."
-            )
-            sys.exit(1)
+        if is_missing_function(exc):
+            _fail_fast_missing("trakt_related_queue", "20261024210000")
+        raise
+
+
+def _write_related(db: SupabaseClient, media_id: str, rows: list[dict], run_start_iso: str) -> int:
+    """One title's rows and stamp, through the one RPC. A missing function
+    exits (SystemExit is not an Exception: _drain_one's catch lets it by);
+    any other error is _drain_one's to count."""
+    try:
+        return db.write_related(media_id, rows, run_start_iso)
+    except Exception as exc:
+        if is_missing_function(exc):
+            _fail_fast_missing("trakt_replace_related", "20261025160000")
         raise
 
 
 def _drain_one(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, row: dict, stats: dict) -> bool:
-    """One title of Phase B: resolve its Trakt id, fetch /related, replace,
-    stamp. Returns True when the title was stamped, False when it failed."""
+    """One title of Phase B: resolve its Trakt id, fetch /related, write its
+    rows and stamp in one RPC. Returns True when the title was stamped, False
+    when it failed."""
     media_id = row["id"]
     tmdb_id = row["tmdb_id"]
     media_type = row["media_type"]
@@ -315,8 +347,7 @@ def _drain_one(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, row: 
             kind = "show" if media_type == "tv" else "movie"
             print(f"[TRAKT] unresolved tmdb={tmdb_id} type={kind} «{row.get('title')}»")
             # Zero rows, so a stale row from the old path can never survive.
-            db.replace_media_related(media_id, [], run_start_iso)
-            db.stamp_trakt_related_synced(media_id, run_start_iso)
+            _write_related(db, media_id, [], run_start_iso)
             return True
         stats["resolved"] += 1
         items = trakt.get_related(media_type, trakt_id, limit=20)
@@ -334,10 +365,7 @@ def _drain_one(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, row: 
                 "rank": rank,
             })
 
-        db.replace_media_related(media_id, related_rows, run_start_iso)
-        db.stamp_trakt_related_synced(media_id, run_start_iso)
-
-        stats["related_rows"] += len(related_rows)
+        stats["related_rows"] += _write_related(db, media_id, related_rows, run_start_iso)
         return True
     except Exception as exc:
         print(f"[TRAKT SYNC]   tmdb_id={tmdb_id}: related drain failed — {exc}")
@@ -383,7 +411,7 @@ def main(clock=None) -> None:
         f"api_calls~{phase_a['api_calls']} "
         f"unmatched_anticipated_sample={sample}"
     )
-    if phase_b.get("stuck_at"):
+    if phase_b.get("stuck_at") or phase_b.get("queue_failed"):
         sys.exit(1)  # Phase B said why, above: the run is red, on purpose
 
 

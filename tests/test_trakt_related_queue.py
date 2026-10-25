@@ -108,9 +108,12 @@ class QueueRpcTest(unittest.TestCase):
 
     def test_the_retry_is_b31s_own(self):
         # Copied, not imported (enrich_new_titles must not move, and the client
-        # cannot import it): this pin keeps the two sets the same.
+        # cannot import it): this pin keeps the two sets the same — plus ONE
+        # code since B5.1, '57014' (a statement cancelled at PostgREST's 8 s),
+        # which killed both drains of 24–25/10 inside this RPC.
         from bot import enrich_new_titles
-        self.assertEqual(supabase_client._TRANSIENT_RPC_CODES, enrich_new_titles._TRANSIENT_QUEUE_CODES)
+        self.assertEqual(supabase_client._TRANSIENT_RPC_CODES, enrich_new_titles._TRANSIENT_QUEUE_CODES | {"57014"})
+        self.assertNotIn("57014", enrich_new_titles._TRANSIENT_QUEUE_CODES)  # the enrichment did not move
         self.assertEqual(supabase_client._TRANSIENT_RPC_ERRORS, enrich_new_titles._TRANSIENT_QUEUE_ERRORS)
         self.assertEqual(supabase_client._RPC_ATTEMPTS, enrich_new_titles._QUEUE_ATTEMPTS)
         self.assertEqual(supabase_client._RPC_RETRY_DELAYS, enrich_new_titles._QUEUE_RETRY_DELAYS)
@@ -160,8 +163,9 @@ class _QueueDb:
         self.rows = rows
         self.stamps_land = stamps_land
         self.error = error
-        # media_id -> how many of its stamps fail quietly (as the real
-        # stamp_trakt_related_synced does: it logs and swallows); -1 = always.
+        # media_id -> how many of its writes return while the queue still
+        # serves the title (B5's swallowed PATCH looked like this; since B5.1
+        # it would be a stamp the queue does not see); -1 = always.
         self.stamp_fails = dict(stamp_fails or {})
         self.asks = []      # (limit, before)
         self.stamped = []   # media_id
@@ -174,15 +178,15 @@ class _QueueDb:
         done = set(self.stamped) if self.stamps_land else set()
         return [r for r in self.rows if r["id"] not in done][:limit]
 
-    def replace_media_related(self, media_id, rows, synced_at):
+    def write_related(self, media_id, rows, synced_at):
+        # The one RPC (B5.1): rows replaced and the title stamped together.
         self.replaced.append(media_id)
-
-    def stamp_trakt_related_synced(self, media_id, synced_at):
         left = self.stamp_fails.get(media_id, 0)
         if left:
             self.stamp_fails[media_id] = left - 1 if left > 0 else left
-            return  # failed quietly: nothing recorded, no exception
+            return len(rows)  # returned, yet the queue will serve it again
         self.stamped.append(media_id)
+        return len(rows)
 
 
 class _ResolvingTrakt:
@@ -400,13 +404,17 @@ class SliceTest(unittest.TestCase):
 
         self.assertEqual(stats["stuck_at"], "m-0")
 
-    def test_any_other_queue_error_propagates(self):
+    def test_any_other_queue_error_stops_the_drain_and_says_so(self):
+        # B5 let it propagate (a traceback, no SUMMARY); since B5.1 a slice that
+        # fails for good is caught, said and recorded, and main exits 1 after
+        # the SUMMARY. Still never swallowed into an empty queue, never the fail-fast.
         denied = APIError({"code": "42501", "message": "permission denied", "hint": None, "details": None})
         db = _QueueDb(_rows(3), error=denied)
 
         result, out = _phase_b(db, batch=3000)
 
-        self.assertIs(result, denied)  # not swallowed into an empty queue, not the fail-fast
+        self.assertIn("42501", result["queue_failed"])
+        self.assertIn("[TRAKT SYNC] ERROR: the queue slice failed — ", out)
         self.assertEqual(db.stamped, [])
         self.assertNotIn("20261024210000", out)
         # Control: the missing function's line does name the migration.
