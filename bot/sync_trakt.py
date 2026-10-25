@@ -1,10 +1,17 @@
 """
-Weekly Trakt sync — SHADOW MODE. Populates trakt_watchers_week,
-trakt_trending_rank, trakt_anticipated_score, trakt_rating, trakt_vote_count,
-trakt_synced_at, trakt_related_synced_at, and public.media_related only.
-Does NOT touch compute_popularity_score, get_media_popular, or any existing
-ranking logic — those are wired up separately, later, once the signal has
-been judged.
+Trakt sync — daily while the related-titles backlog is re-drained, then back
+to Mondays (decision 1.439; .github/workflows/trakt_sync.yml). Writes
+trakt_watchers_week, trakt_trending_rank, trakt_anticipated_score,
+trakt_rating, trakt_vote_count, trakt_synced_at, trakt_related_synced_at and
+public.media_related.
+
+The app reads what this writes. Home's Trending This Week rail and its hero
+banner order by trakt_watchers_week (get_trending_this_week);
+get_media_popular blends a trakt_watchers_week rank 50/50 with its score; the
+New In Theatres and Coming Soon rails gate on trakt_watchers_week and
+trakt_anticipated_score; More Like This reads media_related
+(get_related_titles). Only the bot's own compute_popularity_score ignores the
+trakt_* columns.
 
 Two phases:
 
@@ -19,30 +26,42 @@ Two phases:
   possible; a mismatch is skipped and counted, never written to the wrong
   row. Once both media_types are done, decay_trakt_heat() nulls the three
   list-membership columns (not trakt_rating/trakt_vote_count) on any row
-  that didn't get refreshed this run — i.e. it fell off every list.
-  Anticipated tmdb_ids we don't have in the catalog are expected (mostly
-  unreleased titles) and only logged, never inserted.
+  that didn't get refreshed this run — i.e. it fell off every list —
+  through the server's trakt_decay_heat (migration 20261025160000), 200
+  rows a call while a call returns 200, at most 50 calls. Anticipated
+  tmdb_ids we don't have in the catalog are expected (mostly unreleased
+  titles) and only logged, never inserted.
 
   Phase B — related-titles drain (bounded, state-driven, mirrors
-  enrich_new_titles.py's queue). Since B5 (24/10): takes up to
-  TRAKT_RELATED_BATCH titles from the server's trakt_related_queue(p_limit,
-  p_before) — never synced, or synced before TRAKT_RELATED_FIX_DATE — in the
-  app's order (in theatres → home rails → popularity → newest), in slices of
-  RELATED_SLICE; for each, resolves Trakt's own id from our tmdb_id
-  (TraktClient.resolve_id), fetches /related by that id, and replaces that
-  title's media_related rows (zero rows when Trakt has no such title). It used
-  to select trakt_related_synced_at IS NULL by popularity desc and ask
-  /related with our tmdb_id — which Trakt read as ITS id, so most titles got
-  nothing and the rest got another title's relateds.
+  enrich_new_titles.py's queue). Takes up to TRAKT_RELATED_BATCH titles from
+  the server's trakt_related_queue(p_limit, p_before) — never synced, or
+  synced before TRAKT_RELATED_FIX_DATE — in the app's order (in theatres →
+  home rails → popularity → newest), served by a partial index in
+  milliseconds, in slices of RELATED_SLICE. For each title: /related by its
+  IMDB id when the queue row carries a well-formed one (one Trakt call),
+  otherwise — or when Trakt answers 404 for that IMDB id — by the Trakt id
+  resolved from our tmdb_id (TraktClient.resolve_id); then ONE write,
+  trakt_replace_related, which replaces the title's media_related rows (zero
+  when Trakt has none) and stamps it in one transaction. It stops itself at
+  the time budget (TRAKT_TIME_BUDGET_MIN, inside the job's timeout) and
+  leaves its SUMMARY line. Before B5 it asked /related with our tmdb_id —
+  which Trakt read as ITS id, so most titles got nothing and the rest got
+  another title's relateds.
+
+  The Trakt client paces itself at TRAKT_RATE_LIMIT and, from Trakt's own
+  X-Ratelimit header, pauses before the window runs out instead of running
+  into a 429 and its 300 s Retry-After.
 
 Failure philosophy is deliberately NOT this repo's usual "log and keep
 going" default: Phase A's list fetches are allowed to raise straight out of
-main() (no top-level try/except) — this is a brand-new, unproven
-integration, and a broken auth header or a Trakt API shape change should
-fail the run loudly (red CI) rather than silently write partial/empty
-signals for weeks. The one deliberate exception is Phase B's per-title
-loop, which does catch and count — one show's /related lookup failing
-shouldn't abort a 1500-title drain.
+main() (no top-level try/except) — a broken auth header or a Trakt API
+shape change should fail the run loudly (red CI) rather than silently
+write partial/empty signals for weeks; a missing server function fails
+fast too, naming its migration. The deliberate exceptions: Phase A's decay
+logs any other error and lets Phase B run; Phase B's per-title loop catches
+and counts — one show's /related lookup failing shouldn't abort a
+3,000-title drain; and a queue slice that fails for good stops the drain
+with what landed, prints the SUMMARY and exits 1.
 
 Run via:
     python -m bot.sync_trakt
@@ -59,7 +78,7 @@ from .trakt import TraktClient
 from .supabase_client import SupabaseClient, is_missing_function
 
 DEFAULT_TRAKT_TOP_N = 300
-DEFAULT_TRAKT_RELATED_BATCH = 1500
+DEFAULT_TRAKT_RELATED_BATCH = 3000  # what trakt_sync.yml passes; asked in RELATED_SLICE asks (the server caps one at 10,000)
 # Decision 1.439 (24/10): every trakt_related_synced_at stamp older than this
 # moment was written by the wrong /related path (our tmdb_id in Trakt's id
 # slot), so the server's queue hands those titles back. A run must start after
@@ -434,7 +453,7 @@ def main(clock=None) -> None:
     """*clock* returns the current instant (aware UTC) — the run's start, the
     time budget's checks and the client's pause all read it; injected by
     tests, the real clock otherwise."""
-    print("[TRAKT SYNC] Starting weekly Trakt sync (shadow mode)...")
+    print("[TRAKT SYNC] Starting Trakt sync...")
     config = load_env()
 
     clock = clock if clock is not None else (lambda: datetime.now(timezone.utc))
