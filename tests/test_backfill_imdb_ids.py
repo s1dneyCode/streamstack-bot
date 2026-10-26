@@ -399,6 +399,53 @@ class LookupImdbIdTest(unittest.TestCase):
                 self.assertEqual(client.get_imdb_id(1416, "tv"), expected)
 
 
+class MissingIsACountNotALineTest(unittest.TestCase):
+    """B5.4 · 0b: backfill #1 printed 82 `[TMDB] 404 for …/external_ids — not
+    retrying (client error).` lines, one per MISSING title — an expected
+    outcome the SUMMARY already counts, printed as if it were a failure."""
+
+    def test_a_404_in_the_backfill_prints_no_tmdb_line_and_is_counted(self):
+        with _tmdb([(404, {"status_code": 34})]) as client, mock.patch.object(mod, "PROGRESS_EVERY", 1):
+            stats, out = _run(_Table([_row(1)]), client)
+
+        self.assertNotIn("[TMDB] 404", out)
+        self.assertNotIn("not retrying", out)
+        self.assertEqual((stats["missing"], stats["errors"], stats["written"]), (1, 0, 1))
+        self.assertIn("missing 1", [line for line in out.splitlines() if "[IMDB_ID] progress:" in line][0])
+        self.assertIn(" missing=1 ", _last(out))
+
+    def test_a_500_in_the_backfill_still_prints_its_line_and_is_an_error(self):
+        # Positive control: only the 404 goes quiet.
+        with _tmdb([(500, {})]) as client:
+            stats, out = _run(_Table([_row(1)]), client)
+
+        self.assertEqual(out.count("[TMDB] Request failed (attempt"), 3)
+        self.assertIn("[IMDB_ID] ERROR tmdb=1001 type=tv: HTTPError 500", out)
+        self.assertEqual((stats["errors"], stats["missing"], stats["written"]), (1, 0, 0))
+
+    def test_another_client_error_in_the_backfill_still_prints_its_line(self):
+        # Control: a 401 (a bad key) is not an outcome — its line stays.
+        with _tmdb([(401, {})]) as client:
+            stats, out = _run(_Table([_row(1)]), client)
+
+        self.assertIn("[TMDB] 401 for https://api.themoviedb.org/3/tv/1001/external_ids — not retrying (client error).",
+                      out)
+        self.assertEqual((stats["errors"], stats["missing"]), (1, 0))
+
+    def test_gets_404_line_outside_the_backfill_is_unchanged(self):
+        for path in ("/movie/550/credits", "/tv/1416/external_ids"):
+            with self.subTest(path=path), _tmdb([(404, {})]) as client:
+                with self.assertRaises(requests.HTTPError):
+                    client._get(path)
+                self.assertEqual(client.out.getvalue(),
+                                 f"[TMDB] 404 for https://api.themoviedb.org/3{path} — not retrying (client error).\n")
+        # The same path through another caller still says it: the quiet is lookup_imdb_id's, not the path's.
+        with _tmdb([(404, {})]) as client:
+            self.assertIsNone(client.get_imdb_id(1416, "tv"))
+        self.assertIn("[TMDB] 404 for https://api.themoviedb.org/3/tv/1416/external_ids — not retrying (client error).",
+                      client.out.getvalue())
+
+
 class TmdbRedactionTest(unittest.TestCase):
 
     def test_no_api_key_reaches_a_tmdb_failure_line_or_the_raised_error(self):

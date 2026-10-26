@@ -22,7 +22,9 @@ share:
   NONE    → imdb_checked_at = now (TMDb has no id for it)
   MISSING → imdb_checked_at = now, counted (404: gone from TMDb; the house's
             tmdb_missing_at has its own writers, SupabaseClient.set_tmdb_missing
-            from main.py, enrich_new_titles.py and sync_changes.py — not this)
+            from main.py, enrich_new_titles.py and sync_changes.py — not this).
+            Since B5.4 it prints no line: the progress line and the SUMMARY
+            count it.
   ERROR   → nothing written, counted; the title stays queued for the next run
 One PATCH per row (the logo backfills write the same way: there is no bulk
 writer). TMDb is paced by TmdbClient's own limiter (20 req/s); nothing here

@@ -73,7 +73,8 @@ class TmdbClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get(self, path: str, params: dict | None = None, retries: int = 3) -> dict:
+    def _get(self, path: str, params: dict | None = None, retries: int = 3,
+             quiet_statuses: frozenset[int] = frozenset()) -> dict:
         """
         Perform a GET request against *path* (relative to TMDB_BASE), merging
         *params* with the mandatory api_key parameter.
@@ -90,6 +91,10 @@ class TmdbClient:
         will never succeed just by asking again, so retrying it is pure
         wasted time. Raises the final exception if all attempts are
         exhausted (or immediately, for a non-retryable 4xx).
+
+        *quiet_statuses*: the 4xx statuses a caller expects and counts as an
+        outcome, raised the same way but without the "not retrying" line
+        (B5.4: lookup_imdb_id's 404, MISSING). Every other caller passes none.
         """
         url = f"{TMDB_BASE}{path}"
         merged_params = {"api_key": self.api_key, **(params or {})}
@@ -114,7 +119,8 @@ class TmdbClient:
                 if status is not None and 400 <= status < 500:
                     # Non-retryable client error — fail fast, no point burning
                     # the remaining attempts on a request that can't succeed.
-                    print(f"[TMDB] {status} for {url} — not retrying (client error).")
+                    if status not in quiet_statuses:
+                        print(f"[TMDB] {status} for {url} — not retrying (client error).")
                     # Its message quotes the full URL, api_key included (B5.3).
                     raise redact_exception(exc) from None
 
@@ -1590,9 +1596,11 @@ class TmdbClient:
         title is gone from TMDb) or ERROR (anything else, after _get's
         retries). get_imdb_id below folds all of them into None, which a
         backfill cannot use: a 404 and a timeout must not look the same.
+        The 404 is an outcome its caller counts, so _get does not print it
+        (B5.4); every other status still prints its line.
         """
         try:
-            data = self._get(f"/{media_type}/{tmdb_id}/external_ids")
+            data = self._get(f"/{media_type}/{tmdb_id}/external_ids", quiet_statuses=frozenset({404}))
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
             if status == 404:
