@@ -8,9 +8,12 @@ the raw API response shape.
 Reference: https://developer.themoviedb.org/reference/intro/getting-started
 """
 
+import re
 import time
+from typing import NamedTuple
+
 import requests
-from bot.utils import format_date, clean_text
+from bot.utils import format_date, clean_text, redact_exception, redact_query
 from bot.rate_limiter import RateLimiter
 
 # Base URL for all TMDB v3 endpoints
@@ -30,6 +33,21 @@ TMDB_RATE_LIMIT = 20.0  # requests/second
 CURATED_REGIONS = ("US", "MX", "BR", "AR", "CL", "CO", "PE", "ES")
 
 _PRODUCER_JOBS = {"Producer", "Executive Producer"}
+
+# What TMDb said when asked for a title's IMDb id (lookup_imdb_id, B5.3):
+# FOUND an id; NONE — it answered and has none (or nothing usable); MISSING —
+# 404, the title is gone from TMDb; ERROR — anything else, after _get's retries.
+IMDB_FOUND, IMDB_NONE, IMDB_MISSING, IMDB_ERROR = "found", "none", "missing", "error"
+_IMDB_ID = re.compile(r"tt\d+")
+
+
+class ImdbLookup(NamedTuple):
+    """lookup_imdb_id's answer: the outcome, the id when FOUND, and for an
+    ERROR a short reason (the error's kind and status — never its message,
+    which quotes the URL and with it the api_key)."""
+    outcome: str
+    imdb_id: str | None = None
+    reason: str | None = None
 
 
 def _extract_producers(crew: list[dict]) -> list[dict]:
@@ -97,16 +115,18 @@ class TmdbClient:
                     # Non-retryable client error — fail fast, no point burning
                     # the remaining attempts on a request that can't succeed.
                     print(f"[TMDB] {status} for {url} — not retrying (client error).")
-                    raise
+                    # Its message quotes the full URL, api_key included (B5.3).
+                    raise redact_exception(exc) from None
 
                 last_exc = exc
                 print(
-                    f"[TMDB] Request failed (attempt {attempt}/{retries}): {exc}"
+                    f"[TMDB] Request failed (attempt {attempt}/{retries}): {redact_query(str(exc))}"
                 )
                 if attempt < retries:
                     time.sleep(2)
 
-        raise last_exc  # type: ignore[misc]
+        # Whoever catches it prints it, or Python's traceback does: no api_key in it.
+        raise (redact_exception(last_exc) if isinstance(last_exc, requests.RequestException) else last_exc) from None
 
     # ------------------------------------------------------------------
     # Public methods
@@ -1561,6 +1581,29 @@ class TmdbClient:
             and v.get("site") == "YouTube"
             and v.get("type") in ("Trailer", "Teaser")
         ]
+
+    def lookup_imdb_id(self, tmdb_id: int, media_type: str) -> ImdbLookup:
+        """
+        The IMDb id of a TMDb title, with the outcome told apart (B5.3):
+        FOUND (a well-formed `tt…` id), NONE (TMDb answered and has none, an
+        empty field, or a value that is not an IMDb id), MISSING (404: the
+        title is gone from TMDb) or ERROR (anything else, after _get's
+        retries). get_imdb_id below folds all of them into None, which a
+        backfill cannot use: a 404 and a timeout must not look the same.
+        """
+        try:
+            data = self._get(f"/{media_type}/{tmdb_id}/external_ids")
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status == 404:
+                return ImdbLookup(IMDB_MISSING)
+            return ImdbLookup(IMDB_ERROR, reason=f"HTTPError {status}" if status else "HTTPError")
+        except Exception as exc:
+            return ImdbLookup(IMDB_ERROR, reason=type(exc).__name__)
+        imdb_id = (data or {}).get("imdb_id")
+        if isinstance(imdb_id, str) and _IMDB_ID.fullmatch(imdb_id):
+            return ImdbLookup(IMDB_FOUND, imdb_id)
+        return ImdbLookup(IMDB_NONE)
 
     def get_imdb_id(self, tmdb_id: int, media_type: str) -> str | None:
         """Return the IMDb ID for a given TMDB title, or None if unavailable."""

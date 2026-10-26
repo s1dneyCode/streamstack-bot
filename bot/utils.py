@@ -7,6 +7,33 @@ helpers that any module can import without introducing circular dependencies.
 from datetime import date, timedelta
 import re
 
+import requests
+
+
+_QUERY_STRING = re.compile(r"\?[^\s'\")]*")
+
+
+def redact_query(text: str) -> str:
+    """*text* with every URL query string cut out: requests' error messages
+    quote the full URL ("… for url: …?page=1&limit=100"), and a log line
+    names a path and its ids, never its parameters (B5.2). For TMDb the
+    query carries the api_key itself (B5.3)."""
+    return _QUERY_STRING.sub("", text)
+
+
+def redact_exception(exc: requests.RequestException) -> requests.RequestException:
+    """*exc* again, its message without query strings, its response and
+    request kept (resolve_id reads the response's status). The same object
+    when there is nothing to cut."""
+    text = redact_query(str(exc))
+    if text == str(exc):
+        return exc
+    keep = {"response": getattr(exc, "response", None), "request": getattr(exc, "request", None)}
+    try:
+        return type(exc)(text, **keep)
+    except Exception:
+        return requests.RequestException(text, **keep)
+
 
 def format_date(date_str: str | None) -> str | None:
     """
