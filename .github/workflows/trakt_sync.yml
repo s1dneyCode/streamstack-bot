@@ -5,12 +5,15 @@
 # row with tmdb_missing_at IS NULL has trakt_related_synced_at before that
 # instant, and change tests/test_workflow_trakt_sync.py, which pins this file,
 # in the same commit.
-# Each title costs ≈ 1.4 Trakt calls (one by IMDB id when the title has one,
-# resolve + /related otherwise) and ONE database write (trakt_replace_related,
-# migration 20261025160000). The client pauses before Trakt's own limit
-# (X-Ratelimit) instead of running into its 300 s penalty, and the drain stops
-# itself at the time budget, 80 minutes, inside the job's 90 — so a run always
-# ends with its SUMMARY line.
+# Each title costs one Trakt call by IMDB id when the title has one, resolve +
+# /related otherwise — ≈ 1.4 over the whole pending set, ≈ 1.6 at its head (run
+# #26: 1,087 by IMDB id, 1,913 by lookup) — and ONE database write
+# (trakt_replace_related, migration 20261025160000). Trakt sends this client no
+# X-Ratelimit header (run #26: nine 429s, 300 s Retry-After each), so the client
+# keeps its own budget, 420 requests per 300 s (window_calls below; B5.2),
+# lowered to 315 after a run's first 429. The drain stops itself at the time
+# budget, 80 minutes, inside the job's 90 — so a run always ends with its
+# SUMMARY line.
 # 02:17 UTC, off the top of the hour: GitHub documents that :00 schedules are
 # the ones delayed, and the 03:00 run of 25/10 started five hours late, on top
 # of the other daily jobs.
@@ -30,6 +33,10 @@ on:
         description: 'Minutes after the start when the drain stops itself, with its SUMMARY (inside the 90-minute job)'
         required: false
         default: '80'
+      window_calls:
+        description: "Max Trakt requests in any 300 s, the client's own budget (lowered to 75 % after a 429)"
+        required: false
+        default: '420'
 
 concurrency:
   group: ${{ github.workflow }}
@@ -53,4 +60,5 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           TRAKT_RELATED_BATCH: ${{ github.event.inputs.related_batch || '3000' }}
           TRAKT_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '80' }}
+          TRAKT_WINDOW_CALLS: ${{ github.event.inputs.window_calls || '420' }}
         run: python -m bot.sync_trakt

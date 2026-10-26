@@ -19,7 +19,7 @@ import pathlib
 import re
 import unittest
 
-from bot import sync_trakt
+from bot import sync_trakt, trakt
 
 WORKFLOW = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "trakt_sync.yml"
 
@@ -89,6 +89,19 @@ class TraktSyncCadenceTest(unittest.TestCase):
         # A run started without the env (by hand, outside Actions) drains the same.
         self.assertEqual(sync_trakt.DEFAULT_TRAKT_RELATED_BATCH, 3000)
         self.assertEqual(sync_trakt.DEFAULT_TRAKT_TIME_BUDGET_MIN, 80)
+        self.assertEqual(trakt.DEFAULT_WINDOW_CALLS, 420)
+
+    def test_the_budget_window_is_420_calls_for_the_schedule_and_the_dispatch(self):
+        # B5.2: the client's own sliding-window budget; TRAKT_WINDOW_SECONDS
+        # is left to its env default (300), not mapped here.
+        self.assertRegex(self.text, r"window_calls:\n(?:.*\n){0,3}?\s+default: '420'")
+        self.assertIn("TRAKT_WINDOW_CALLS: ${{ github.event.inputs.window_calls || '420' }}", self.text)
+        self.assertNotIn("TRAKT_WINDOW_SECONDS", self.text)
+
+    def test_the_header_no_longer_counts_on_trakts_header(self):
+        # Run #26: Trakt sent no X-Ratelimit; the client paces itself (B5.2).
+        self.assertNotIn("pauses before Trakt's own limit", header(self.text))
+        self.assertIn("420 requests per 300 s", header(self.text))
 
     def test_the_file_says_why_until_when_and_how_much(self):
         head = self.text.splitlines()[0]
