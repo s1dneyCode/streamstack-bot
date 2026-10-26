@@ -78,7 +78,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from .trakt import DEFAULT_WINDOW_CALLS, DEFAULT_WINDOW_SECONDS, TraktClient
+from .trakt import DEFAULT_WINDOW_CALLS, DEFAULT_WINDOW_SECONDS, TraktClient, redact_query
 from .supabase_client import SupabaseClient, is_missing_function
 
 DEFAULT_TRAKT_TOP_N = 300
@@ -452,7 +452,7 @@ def _drain_one(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, row: 
         stats["related_rows"] += _write_related(db, media_id, related_rows, run_start_iso)
         return True
     except Exception as exc:
-        print(f"[TRAKT SYNC]   tmdb_id={tmdb_id}: related drain failed — {exc}")
+        print(f"[TRAKT SYNC]   tmdb_id={tmdb_id}: related drain failed — {redact_query(str(exc))}")
         stats["errors"] += 1
         return False
 

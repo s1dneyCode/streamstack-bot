@@ -16,6 +16,7 @@ Reference: https://trakt.docs.apiary.io/
 
 import json
 import os
+import re
 import sys
 import time
 from collections import deque
@@ -67,6 +68,16 @@ _SEARCH_TYPE = {"movie": "movie", "tv": "show"}  # Trakt's ?type= and result key
 def _header_names(response: requests.Response) -> list[str]:
     """A response's header NAMES, sorted — never their values."""
     return sorted(response.headers.keys(), key=str.lower)
+
+
+_QUERY_STRING = re.compile(r"\?[^\s'\")]*")
+
+
+def redact_query(text: str) -> str:
+    """*text* with every URL query string cut out: requests' error messages
+    quote the full URL ("… for url: …?page=1&limit=100"), and a log line
+    names a path and its ids, never its parameters (B5.2)."""
+    return _QUERY_STRING.sub("", text)
 
 
 def load_env() -> dict[str, str]:
@@ -228,13 +239,17 @@ class TraktClient:
                 response.raise_for_status()
                 return response
             except requests.RequestException as exc:
+                if isinstance(exc, requests.exceptions.InvalidHeader):
+                    # requests quotes the offending header VALUE in its message —
+                    # here the trakt-api-key. Nothing below prints or raises it.
+                    exc = requests.exceptions.InvalidHeader("a request header is malformed (value withheld)")
                 status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
                 if status is not None and 400 <= status < 500:
                     print(f"[TRAKT] {status} for {url} — not retrying (client error).")
                     raise
 
                 last_exc = exc
-                print(f"[TRAKT] Request failed (attempt {attempt}/{retries}): {exc}")
+                print(f"[TRAKT] Request failed (attempt {attempt}/{retries}): {redact_query(str(exc))}")
                 if attempt < retries:
                     self._sleep(2)
 
@@ -368,7 +383,9 @@ class TraktClient:
         try:
             page_count = int(raw_page_count) if raw_page_count else 1
         except ValueError:
-            print(f"[TRAKT] Malformed X-Pagination-Page-Count header ({raw_page_count!r}) for {path} — treating as a single page.")
+            # The name only: the only header values ever printed are
+            # Retry-After's and X-Ratelimit's (B5.2).
+            print(f"[TRAKT] Malformed X-Pagination-Page-Count header for {path} — treating as a single page.")
             page_count = 1
         return response.json(), page_count
 

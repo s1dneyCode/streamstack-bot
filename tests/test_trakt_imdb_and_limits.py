@@ -151,6 +151,11 @@ def _at(minute, second=0):
     return lambda: datetime(2026, 10, 25, 3, minute, second, tzinfo=timezone.utc)
 
 
+def _without_names_line(out):
+    """The log without B5.2's first-response line, which names every header."""
+    return "\n".join(line for line in out.splitlines() if not line.startswith("[TRAKT] First response headers:"))
+
+
 def _three_requests(answers, clock=_at(4)):
     """Three GETs against one path whose responses are *answers* in order."""
     router = _Router({"/movies/trending": list(answers)})
@@ -200,14 +205,17 @@ class RateLimitHeaderTest(unittest.TestCase):
             with self.subTest(header=label):
                 client, sleeps, out = _three_requests(answers)
                 # Three responses, one line about the header. (Since B5.2 the
-                # first response's header NAMES are printed too, so the needle
-                # is the log line, not the bare name.)
-                self.assertEqual(out.count("X-Ratelimit header"), 1)
+                # first response's header NAMES are printed too; that line is
+                # set aside, and everything else is counted as before.)
+                self.assertIn("[TRAKT] First response headers:", out)
+                self.assertEqual(_without_names_line(out).count("X-Ratelimit"), 1)
                 self.assertEqual(sleeps, [])
                 self.assertIn(f"trakt_limit={limit} ", client.rate_limit_summary())
-        # Control: a well-formed header is read, and nothing is logged about it.
+        # Control: a well-formed header is read, and nothing is logged about it
+        # beyond its name in the first response's list.
         client, _, out = _three_requests([(200, [], _limit(999))])
-        self.assertNotIn("X-Ratelimit header", out)
+        self.assertIn("'X-Ratelimit'", out)
+        self.assertNotIn("X-Ratelimit", _without_names_line(out))
         self.assertIn("trakt_limit=1000/300s", client.rate_limit_summary())
 
     def test_the_summary_names_the_first_limit_and_counts_pauses_and_429s(self):
