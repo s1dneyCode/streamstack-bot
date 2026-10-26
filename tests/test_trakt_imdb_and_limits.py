@@ -191,9 +191,12 @@ class RateLimitHeaderTest(unittest.TestCase):
         self.assertEqual(sleeps, [30.0])                      # milliseconds in `until` parse too
 
     def test_a_missing_or_malformed_header_is_logged_once_and_changes_nothing(self):
-        for label, answers in (("missing", [(200, [])]),
-                               ("not json", [(200, [], {"X-Ratelimit": "not json"})]),
-                               ("no remaining", [(200, [], {"X-Ratelimit": json.dumps({"limit": 1000})})])):
+        # B5.2: a run whose responses carried no header at all says
+        # "header-missing"; "unknown" stays for one that only came malformed.
+        for label, answers, limit in (("missing", [(200, [])], "header-missing"),
+                                      ("not json", [(200, [], {"X-Ratelimit": "not json"})], "unknown"),
+                                      ("no remaining", [(200, [], {"X-Ratelimit": json.dumps({"limit": 1000})})],
+                                       "unknown")):
             with self.subTest(header=label):
                 client, sleeps, out = _three_requests(answers)
                 # Three responses, one line about the header. (Since B5.2 the
@@ -201,7 +204,7 @@ class RateLimitHeaderTest(unittest.TestCase):
                 # is the log line, not the bare name.)
                 self.assertEqual(out.count("X-Ratelimit header"), 1)
                 self.assertEqual(sleeps, [])
-                self.assertIn("trakt_limit=unknown", client.rate_limit_summary())
+                self.assertIn(f"trakt_limit={limit} ", client.rate_limit_summary())
         # Control: a well-formed header is read, and nothing is logged about it.
         client, _, out = _three_requests([(200, [], _limit(999))])
         self.assertNotIn("X-Ratelimit header", out)
@@ -219,7 +222,9 @@ class RateLimitHeaderTest(unittest.TestCase):
             client.get_trending("movie")     # a 429 (Retry-After 2 s), then remaining=20
             client.get_trending("movie")     # paused first
 
-        self.assertEqual(client.rate_limit_summary(), "trakt_limit=1000/300s trakt_pauses=1 trakt_429=1")
+        # B5.1's three tokens still lead the string; B5.2 appends the budget's
+        # three (pinned in tests/test_trakt_budget.py).
+        self.assertTrue(client.rate_limit_summary().startswith("trakt_limit=1000/300s trakt_pauses=1 trakt_429=1 "))
         self.assertEqual(client.sleeps, [2.0, 60.0])          # the 429's Retry-After, then the pause
 
     def test_a_429_still_honours_retry_after(self):

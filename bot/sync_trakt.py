@@ -48,9 +48,13 @@ Two phases:
   which Trakt read as ITS id, so most titles got nothing and the rest got
   another title's relateds.
 
-  The Trakt client paces itself at TRAKT_RATE_LIMIT and, from Trakt's own
-  X-Ratelimit header, pauses before the window runs out instead of running
-  into a 429 and its 300 s Retry-After.
+  The Trakt client paces itself under its own budget (B5.2): at most
+  TRAKT_WINDOW_CALLS requests in any TRAKT_WINDOW_SECONDS (default 420 per
+  300 s), lowered to 75 % (never below 100) after a run's first 429, with
+  TRAKT_RATE_LIMIT's 3.0/s bucket underneath as the burst cap. Trakt sends
+  it no X-Ratelimit header (run #26: nine 429s, 300 s Retry-After each), so
+  B5.1's pause on that header acts only when one arrives; a 429 still costs
+  its Retry-After, and every 429 prints how many requests it took.
 
 Failure philosophy is deliberately NOT this repo's usual "log and keep
 going" default: Phase A's list fetches are allowed to raise straight out of
@@ -74,7 +78,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from .trakt import TraktClient
+from .trakt import DEFAULT_WINDOW_CALLS, DEFAULT_WINDOW_SECONDS, TraktClient
 from .supabase_client import SupabaseClient, is_missing_function
 
 DEFAULT_TRAKT_TOP_N = 300
@@ -90,6 +94,10 @@ RELATED_SLICE = 1000
 # passed since the run's start (B5.1) — inside the job's timeout-minutes 90,
 # so a run ends with its SUMMARY instead of being killed mid-title.
 DEFAULT_TRAKT_TIME_BUDGET_MIN = 80
+# The longest TRAKT_WINDOW_SECONDS a run accepts (B5.2): one budget wait lasts
+# at most a window, and the job's timeout-minutes 90 leave 10 minutes past
+# the 80-minute budget.
+MAX_TRAKT_WINDOW_SECONDS = 600
 # A well-formed IMDB id: Trakt's /related takes it in the id slot, so a title
 # that has one costs one Trakt call instead of resolve + /related (B5.1).
 _IMDB_ID = re.compile(r"tt\d+")
@@ -472,9 +480,26 @@ def main(clock=None) -> None:
     top_n = int(os.environ.get("TRAKT_TOP_N", DEFAULT_TRAKT_TOP_N))
     related_batch = int(os.environ.get("TRAKT_RELATED_BATCH", DEFAULT_TRAKT_RELATED_BATCH))
     budget_min = int(os.environ.get("TRAKT_TIME_BUDGET_MIN", DEFAULT_TRAKT_TIME_BUDGET_MIN))
+    # The Trakt client's own sliding-window budget (B5.2): Trakt sends no
+    # X-Ratelimit header, so the client paces itself under this.
+    window_calls = int(os.environ.get("TRAKT_WINDOW_CALLS", DEFAULT_WINDOW_CALLS))
+    window_seconds = int(os.environ.get("TRAKT_WINDOW_SECONDS", DEFAULT_WINDOW_SECONDS))
+    # Fail fast on a window that cannot work, before Phase A writes anything:
+    # no calls at all, no window at all, or a window whose single wait could
+    # outrun the 10 minutes between the 80-minute budget and the job's 90.
+    if window_calls < 1:
+        print(f"[TRAKT SYNC] ERROR: TRAKT_WINDOW_CALLS must be at least 1 (got {window_calls}).")
+        sys.exit(1)
+    if not 1 <= window_seconds <= MAX_TRAKT_WINDOW_SECONDS:
+        print(
+            f"[TRAKT SYNC] ERROR: TRAKT_WINDOW_SECONDS must be between 1 and {MAX_TRAKT_WINDOW_SECONDS} "
+            f"(got {window_seconds})."
+        )
+        sys.exit(1)
     deadline = now + timedelta(minutes=budget_min)
 
-    trakt = TraktClient(client_id=config["TRAKT_CLIENT_ID"], clock=clock)
+    trakt = TraktClient(client_id=config["TRAKT_CLIENT_ID"], clock=clock,
+                        window_calls=window_calls, window_seconds=window_seconds)
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
 
     phase_a = _run_phase_a(trakt, db, run_start_iso, top_n)
