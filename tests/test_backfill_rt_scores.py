@@ -13,7 +13,9 @@ read what phase 1 wrote.
 
 Fakes only: a Supabase client whose `media` table applies the filters and
 writes the script sends (so a write by tmdb_id would visibly touch the show),
-TMDb and OMDb clients with canned answers, and a clock the test hands in.
+read through SupabaseClient's own get_movies_without_imdb_id (the review of
+B5.4: the by-id write leans on what that query selects), TMDb and OMDb clients
+with canned answers, and a clock the test hands in.
 No network, no database. Run from the repo root:
     python -m unittest discover -s tests -t . -v
 """
@@ -26,7 +28,10 @@ import unittest
 from datetime import datetime, timezone
 from unittest import mock
 
+import httpx
+
 from bot import backfill_rt_scores as mod
+from bot.supabase_client import SupabaseClient
 from bot.tmdb import IMDB_ERROR, IMDB_FOUND, IMDB_MISSING, IMDB_NONE, ImdbLookup
 
 START = datetime(2026, 10, 26, 18, 0, tzinfo=timezone.utc)
@@ -58,6 +63,8 @@ class _Query:
         rows = [r for r in self.t.rows if all(r.get(col) == value for _, (col, value), _ in self.named("eq"))]
         update = self.named("update")
         if update:
+            if any(value in self.t.fail_writes for _, (_col, value), _ in self.named("eq")):
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
             for r in rows:
                 r.update(update[0][1][0])
             return types.SimpleNamespace(data=rows)
@@ -70,8 +77,8 @@ class _Query:
 
 
 class _Db:
-    def __init__(self, rows):
-        self.rows, self.executed = rows, []
+    def __init__(self, rows, fail_writes=()):
+        self.rows, self.executed, self.fail_writes = rows, [], set(fail_writes)
         self.client = self
 
     def table(self, name):
@@ -79,9 +86,14 @@ class _Db:
         return _Query(self)
 
     def get_movies_without_imdb_id(self):
-        # SupabaseClient's read, which B5.4 leaves as it is: movies with no imdb_id.
-        return [{"id": r["id"], "tmdb_id": r["tmdb_id"], "title": r["title"]}
-                for r in self.rows if r["media_type"] == "movie" and r["imdb_id"] is None]
+        # SupabaseClient's own read, which B5.4 leaves as it is, run on this
+        # fake table: phase 1's by-id write leans on the id it selects and the
+        # movies it keeps, so those are the real query's, not a stand-in's.
+        return SupabaseClient.get_movies_without_imdb_id(self)
+
+    @property
+    def reads(self):
+        return [q for q in self.executed if q.named("select")]
 
     @property
     def imdb_writes(self):
@@ -173,6 +185,37 @@ class Phase1WritesByIdTest(unittest.TestCase):
         _main(_Db([_row(1, 1416)]), tmdb)
 
         self.assertEqual(tmdb.asked, [("lookup_imdb_id", 1416, "movie")])
+
+    def test_phase_1_reads_each_movie_with_its_id_and_never_a_show(self):
+        # B5.4 · close: the write goes by row["id"], so the read must select
+        # it, and must keep the shows out (lookup_imdb_id is asked as a movie).
+        db = _Db([_row(1, 1416), _row(2, 1416, media_type="tv"), _row(3, 1417, imdb_id="tt0001417")])
+        tmdb = _Tmdb({})
+        _main(db, tmdb)
+
+        read = db.reads[0]
+        self.assertIn("id", [c.strip() for c in read.named("select")[0][1][0].split(",")])
+        self.assertIn(("media_type", "movie"), [o[1] for o in read.named("eq")])
+        self.assertIn(("imdb_id", "null"), [o[1] for o in read.named("is_")])
+        self.assertEqual(tmdb.asked, [("lookup_imdb_id", 1416, "movie")])  # the show and the one with an id: not asked
+
+    def test_a_failed_write_leaves_the_row_unstamped_and_the_script_goes_on(self):
+        # B5.4 · close: NONE and MISSING movies are stamped on every run (the
+        # read does not filter imdb_checked_at), so a dropped connection on one
+        # PATCH — backfill #1 had two — must not end the script before phase 2.
+        db = _Db([_row(1, 101), _row(2, 102)], fail_writes={"m-00001"})
+        omdb = _Omdb(score=77)
+        try:
+            out, raised = _main(db, _Tmdb({101: ImdbLookup(IMDB_NONE), 102: ImdbLookup(IMDB_FOUND, "tt0000102")}),
+                                omdb), None
+        except Exception as exc:
+            out, raised = "", exc
+
+        self.assertIsNone(raised)
+        self.assertIn("[RT_BACKFILL] 1/2 Title 1: write failed (RemoteProtocolError) — not stamped", out)
+        self.assertIsNone(db.rows[0]["imdb_checked_at"])                  # asked again on the next run
+        self.assertEqual(db.rows[1]["imdb_id"], "tt0000102")              # the next title is written
+        self.assertEqual(len(omdb.asked), 2)                              # and phase 2 ran
 
     def test_phase_2_reads_the_id_phase_1_wrote(self):
         # Control: phase 2 is not this run's, and still reads what phase 1 wrote.

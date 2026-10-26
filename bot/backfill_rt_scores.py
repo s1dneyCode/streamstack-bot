@@ -7,7 +7,8 @@ Phase 1: fill missing imdb_ids via TMDB external_ids endpoint. Since B5.4 it
 asks through TmdbClient.lookup_imdb_id and writes like bot/backfill_imdb_ids.py:
 by the row's id — never by tmdb_id, which a show can share with the movie —
 the id and imdb_checked_at for FOUND, imdb_checked_at alone for NONE and
-MISSING, nothing for ERROR.
+MISSING, nothing for ERROR; a failed write leaves the row unstamped and the
+phase goes on.
 Phase 2: update RT scores using OMDb, with imdb_id as the primary lookup strategy.
 
 By default, Phase 2 only processes movies where rt_score IS NULL (cheap
@@ -77,13 +78,20 @@ def main(clock=None) -> None:
             fields = {"imdb_checked_at": now}
             if result.outcome == IMDB_FOUND:
                 fields = {"imdb_id": result.imdb_id, "imdb_checked_at": now}
-            db.client.table("media").update(fields).eq("id", row["id"]).execute()
-            if result.outcome == IMDB_FOUND:
-                print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id={result.imdb_id}")
-            elif result.outcome == IMDB_MISSING:
-                print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: gone from TMDb (404)")
+            # Caught like backfill_imdb_ids._write: the read does not filter
+            # imdb_checked_at, so every NONE and MISSING movie is stamped again
+            # on each run, and one dropped connection must not cost phase 2.
+            try:
+                db.client.table("media").update(fields).eq("id", row["id"]).execute()
+            except Exception as exc:
+                print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: write failed ({type(exc).__name__}) — not stamped")
             else:
-                print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id not found")
+                if result.outcome == IMDB_FOUND:
+                    print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id={result.imdb_id}")
+                elif result.outcome == IMDB_MISSING:
+                    print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: gone from TMDb (404)")
+                else:
+                    print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id not found")
 
         time.sleep(0.2)
 
