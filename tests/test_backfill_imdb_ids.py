@@ -392,7 +392,8 @@ class LookupImdbIdTest(unittest.TestCase):
         self.assertNotIn("api_key", client.out.getvalue())
 
     def test_the_old_get_imdb_id_answers_as_before(self):
-        # backfill_rt_scores.py still calls it: an id, or None for anything else.
+        # No caller since B5.4 (backfill_rt_scores.py asks lookup_imdb_id); an orphan,
+        # listed and not deleted, it still answers as before: an id, or None for anything else.
         for answers, expected in (([(200, {"imdb_id": "tt0413573"})], "tt0413573"), ([(404, {})], None),
                                   ([(500, {})], None)):
             with self.subTest(expected=expected), _tmdb(list(answers)) as client:

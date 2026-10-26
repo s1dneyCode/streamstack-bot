@@ -3,7 +3,11 @@ One-time backfill: populate rt_score for movies in public.media using OMDb.
 
 TV shows are skipped — OMDb does not provide RT scores for series.
 
-Phase 1: fill missing imdb_ids via TMDB external_ids endpoint.
+Phase 1: fill missing imdb_ids via TMDB external_ids endpoint. Since B5.4 it
+asks through TmdbClient.lookup_imdb_id and writes like bot/backfill_imdb_ids.py:
+by the row's id — never by tmdb_id, which a show can share with the movie —
+the id and imdb_checked_at for FOUND, imdb_checked_at alone for NONE and
+MISSING, nothing for ERROR.
 Phase 2: update RT scores using OMDb, with imdb_id as the primary lookup strategy.
 
 By default, Phase 2 only processes movies where rt_score IS NULL (cheap
@@ -18,8 +22,9 @@ Run via:
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
-from .tmdb import TmdbClient
+from .tmdb import IMDB_ERROR, IMDB_FOUND, IMDB_MISSING, TmdbClient
 from .omdb import OmdbClient
 from .supabase_client import SupabaseClient
 
@@ -42,10 +47,13 @@ def extract_year(release_date: str | None) -> str | None:
     return None
 
 
-def main() -> None:
+def main(clock=None) -> None:
+    """*clock* returns the current instant (aware UTC), phase 1's
+    imdb_checked_at; injected by tests, the real clock otherwise."""
     print("[RT_BACKFILL] Starting RT score backfill...")
     force = "--force" in sys.argv[1:]
     config = load_env()
+    clock = clock if clock is not None else (lambda: datetime.now(timezone.utc))
 
     db   = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
     tmdb = TmdbClient(api_key=config["TMDB_API_KEY"])
@@ -61,12 +69,21 @@ def main() -> None:
         tmdb_id = row["tmdb_id"]
         title   = row["title"]
 
-        imdb_id = tmdb.get_imdb_id(tmdb_id=tmdb_id, media_type="movie")
-        if imdb_id:
-            db.client.table("media").update({"imdb_id": imdb_id}).eq("tmdb_id", tmdb_id).execute()
-            print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id={imdb_id}")
+        result = tmdb.lookup_imdb_id(tmdb_id=tmdb_id, media_type="movie")
+        if result.outcome == IMDB_ERROR:
+            print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id lookup failed ({result.reason}) — not stamped")
         else:
-            print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id not found")
+            now = clock().isoformat()
+            fields = {"imdb_checked_at": now}
+            if result.outcome == IMDB_FOUND:
+                fields = {"imdb_id": result.imdb_id, "imdb_checked_at": now}
+            db.client.table("media").update(fields).eq("id", row["id"]).execute()
+            if result.outcome == IMDB_FOUND:
+                print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id={result.imdb_id}")
+            elif result.outcome == IMDB_MISSING:
+                print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: gone from TMDb (404)")
+            else:
+                print(f"[RT_BACKFILL] {i}/{len(missing)} {title}: imdb_id not found")
 
         time.sleep(0.2)
 
