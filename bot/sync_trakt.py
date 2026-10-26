@@ -64,7 +64,7 @@ write partial/empty signals for weeks; a missing server function fails
 fast too, naming its migration. The deliberate exceptions: Phase A's decay
 logs any other error and lets Phase B run; Phase B's per-title loop catches
 and counts — one show's /related lookup failing shouldn't abort a
-3,000-title drain; and a queue slice that fails for good stops the drain
+5,000-title drain; and a queue slice that fails for good stops the drain
 with what landed, prints the SUMMARY and exits 1.
 
 Run via:
@@ -82,7 +82,7 @@ from .trakt import DEFAULT_WINDOW_CALLS, DEFAULT_WINDOW_SECONDS, TraktClient, re
 from .supabase_client import SupabaseClient, is_missing_function
 
 DEFAULT_TRAKT_TOP_N = 300
-DEFAULT_TRAKT_RELATED_BATCH = 3000  # what trakt_sync.yml passes; asked in RELATED_SLICE asks (the server caps one at 10,000)
+DEFAULT_TRAKT_RELATED_BATCH = 5000  # what trakt_sync.yml passes (3000 until B5.4); asked in RELATED_SLICE asks (the server caps one at 10,000)
 # Decision 1.439 (24/10): every trakt_related_synced_at stamp older than this
 # moment was written by the wrong /related path (our tmdb_id in Trakt's id
 # slot), so the server's queue hands those titles back. A run must start after
@@ -321,7 +321,7 @@ def _run_phase_b(trakt: TraktClient, db: SupabaseClient, run_start_iso: str, bat
         # waste and turns the run red. What it cannot see: a short slice is
         # drained once more, so a queue smaller than a slice, or a last ask
         # smaller than a slice (a batch between RELATED_SLICE and twice it),
-        # ends green even when no stamp lands. The schedule's 3,000 is three
+        # ends green even when no stamp lands. The schedule's 5,000 is five
         # full asks.
         repeats = [r for r in rows if r["id"] in stamped_this_run]
         twice = next((r for r in repeats if r["id"] in drained_again), None)

@@ -2,8 +2,8 @@
 Unit tests for Trakt Sync's schedule (RUN B5 · 0c, moved by B5.1 · 0c): daily
 while the backlog is re-drained — decision 1.439 — at 02:17 UTC, off the top of
 the hour that GitHub delays (run #24 of the 03:00 schedule started five hours
-late, on top of the other daily jobs), with 3,000 related titles a run and a
-time budget of 80 minutes inside the job's 90.
+late, on top of the other daily jobs), with 5,000 related titles a run (3,000
+until B5.4) and a time budget of 80 minutes inside the job's 90.
 
 What moved in B5.1: the cron (0 3 * * * → 17 2 * * *), the header's numbers
 (56,411 / ≈ 19 days → 131,456 pending / ≈ 44 days), and two new pins — the
@@ -68,9 +68,9 @@ class TraktSyncCadenceTest(unittest.TestCase):
         self.assertEqual([c for c in active_crons(monday) if on_the_hour(c)], ["0 8 * * 1"])
         self.assertEqual(active_crons(commented), ["17 2 * * *"])
 
-    def test_the_related_batch_is_3000_for_the_schedule_and_the_dispatch(self):
-        self.assertRegex(self.text, r"related_batch:\n(?:.*\n){0,3}?\s+default: '3000'")
-        self.assertIn("TRAKT_RELATED_BATCH: ${{ github.event.inputs.related_batch || '3000' }}", self.text)
+    def test_the_related_batch_is_5000_for_the_schedule_and_the_dispatch(self):
+        self.assertRegex(self.text, r"related_batch:\n(?:.*\n){0,3}?\s+default: '5000'")
+        self.assertIn("TRAKT_RELATED_BATCH: ${{ github.event.inputs.related_batch || '5000' }}", self.text)
         self.assertNotIn("'4000'", self.text)
 
     def test_the_time_budget_is_80_minutes_for_the_schedule_and_the_dispatch(self):
@@ -87,7 +87,7 @@ class TraktSyncCadenceTest(unittest.TestCase):
 
     def test_the_codes_defaults_are_what_the_workflow_passes(self):
         # A run started without the env (by hand, outside Actions) drains the same.
-        self.assertEqual(sync_trakt.DEFAULT_TRAKT_RELATED_BATCH, 3000)
+        self.assertEqual(sync_trakt.DEFAULT_TRAKT_RELATED_BATCH, 5000)
         self.assertEqual(sync_trakt.DEFAULT_TRAKT_TIME_BUDGET_MIN, 80)
         self.assertEqual(trakt.DEFAULT_WINDOW_CALLS, 420)
 

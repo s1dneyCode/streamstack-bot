@@ -5,6 +5,12 @@
 # row with tmdb_missing_at IS NULL has trakt_related_synced_at before that
 # instant, and change tests/test_workflow_trakt_sync.py, which pins this file,
 # in the same commit.
+# 5,000 a run since B5.4: run #29 drained 3,000 in 58 minutes with no 429, the
+# budget below its only brake (51 waits). 123,962 were pending on 26/10: ≈ 25
+# days at 5,000. The 80 minutes hold ≈ 6,700 requests at 420 per 300 s, so
+# 5,000 titles fit at up to ≈ 1.3 requests a title; #29 spent ≈ 1.57. Until
+# the IMDb-id backfill brings the head there, the time budget ends a run short
+# of 5,000, with its SUMMARY and exit 0 — a plan, not a failure.
 # Each title costs one Trakt call by IMDB id when the title has one, resolve +
 # /related otherwise — ≈ 1.4 over the whole pending set, ≈ 1.6 at its head (run
 # #26: 1,087 by IMDB id, 1,913 by lookup) — and ONE database write
@@ -28,7 +34,7 @@ on:
       related_batch:
         description: 'Max titles to drain from trakt_related_queue this run (asked in slices of 1,000)'
         required: false
-        default: '3000'
+        default: '5000'
       time_budget_min:
         description: 'Minutes after the start when the drain stops itself, with its SUMMARY (inside the 90-minute job)'
         required: false
@@ -58,7 +64,7 @@ jobs:
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          TRAKT_RELATED_BATCH: ${{ github.event.inputs.related_batch || '3000' }}
+          TRAKT_RELATED_BATCH: ${{ github.event.inputs.related_batch || '5000' }}
           TRAKT_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '80' }}
           TRAKT_WINDOW_CALLS: ${{ github.event.inputs.window_calls || '420' }}
         run: python -m bot.sync_trakt
