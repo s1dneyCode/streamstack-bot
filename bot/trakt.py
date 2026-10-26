@@ -15,12 +15,14 @@ Reference: https://trakt.docs.apiary.io/
 """
 
 import json
+import math
 import os
 import re
 import sys
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 import requests
 
@@ -43,6 +45,9 @@ TRAKT_RATE_LIMIT = 3.0  # requests/second
 TRAKT_RATELIMIT_FLOOR = 25
 _PAUSE_MIN_SECONDS = 1.0
 _PAUSE_MAX_SECONDS = 300.0
+# A 429's wait when Retry-After is absent or not understood (B5.3: it may be
+# seconds or an HTTP date; either is bounded to the pause's 1–300 s).
+_RETRY_AFTER_DEFAULT_SECONDS = 2.0
 
 # The budget the client enforces on itself (B5.2): at most DEFAULT_WINDOW_CALLS
 # requests in any DEFAULT_WINDOW_SECONDS. 420 per 300 s is ≈ 1.4/s — run #26
@@ -242,13 +247,17 @@ class TraktClient:
                     self._429s += 1
                     self._measure_429(response, sent_at)
                     self._lower_budget_once()
-                    retry_after = response.headers.get("Retry-After")
-                    wait = float(retry_after) if retry_after else 2.0
+                    wait = self._retry_after_seconds(response.headers.get("Retry-After"))
                     print(f"[TRAKT] Rate limited (429, attempt {attempt}/{retries}) — waiting {wait}s...")
                     last_exc = requests.HTTPError(f"429 Too Many Requests: {url}")
                     if attempt < retries:
                         self._sleep(wait)
                         self._pause = None  # Retry-After was the wait; do not wait twice
+                    else:
+                        # The last attempt: this title fails, but the run's next
+                        # request must not leave inside Trakt's penalty (B5.3).
+                        # The pause the header path arms, slept before it.
+                        self._pause = {"kind": "429", "until": self._clock() + timedelta(seconds=wait)}
                     continue
                 response.raise_for_status()
                 return response
@@ -365,19 +374,48 @@ class TraktClient:
         )
 
     def _pause_before_the_wall(self) -> None:
-        """When the last header asked for it, wait until its `until`, bounded
-        to 1–300 s, on the injected clock — once per pause."""
+        """When the last header asked for it — or a 429 on a last attempt
+        armed it (B5.3) — wait until its `until`, bounded to 1–300 s, on the
+        injected clock — once per pause."""
         pause, self._pause = self._pause, None
         if pause is None:
             return
         wait = (pause["until"] - self._clock()).total_seconds()
         wait = min(max(wait, _PAUSE_MIN_SECONDS), _PAUSE_MAX_SECONDS)
-        print(
-            f"[TRAKT] Near the limit (remaining={pause['remaining']} of {pause['limit']} per {pause['period']} s) "
-            f"— pausing {wait:.0f}s until {pause['until_raw']}"
-        )
+        if pause.get("kind") == "429":
+            print(f"[TRAKT] Penalty from a 429 on a last attempt — pausing {wait:.0f}s before the next request")
+        else:
+            print(
+                f"[TRAKT] Near the limit (remaining={pause['remaining']} of {pause['limit']} per {pause['period']} s) "
+                f"— pausing {wait:.0f}s until {pause['until_raw']}"
+            )
         self._pauses += 1
         self._sleep(wait)
+
+    def _retry_after_seconds(self, raw: str | None) -> float:
+        """A 429's Retry-After as seconds — a number, or an HTTP date read
+        against the injected clock — bounded to 1–300 s. Absent: the 2.0 s
+        default. Not understood: the default and one line (B5.3: a date
+        used to escape _request as a ValueError)."""
+        if not raw:
+            return _RETRY_AFTER_DEFAULT_SECONDS
+        try:
+            seconds = float(raw)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(raw)
+            except (TypeError, ValueError, IndexError):
+                when = None
+            if when is None:
+                print(f"[TRAKT] Retry-After {raw[:80]!r} not understood — waiting {_RETRY_AFTER_DEFAULT_SECONDS} s")
+                return _RETRY_AFTER_DEFAULT_SECONDS
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            seconds = (when - self._clock()).total_seconds()
+        if math.isnan(seconds):
+            print(f"[TRAKT] Retry-After {raw[:80]!r} not understood — waiting {_RETRY_AFTER_DEFAULT_SECONDS} s")
+            return _RETRY_AFTER_DEFAULT_SECONDS
+        return min(max(seconds, _PAUSE_MIN_SECONDS), _PAUSE_MAX_SECONDS)
 
     def _get(self, path: str, params: dict | None = None) -> dict | list:
         """GET *path*, returning the parsed JSON body only."""
