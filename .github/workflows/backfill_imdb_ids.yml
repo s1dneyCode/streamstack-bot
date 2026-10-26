@@ -1,0 +1,47 @@
+# Backfill IMDb ids (B5.3): ask TMDb, once, for the IMDb id of every title
+# that has none, and remember the asking — so the Trakt drain can ask /related
+# by IMDb id in ONE call instead of resolving first (run #26 sent 1,913 of its
+# 3,000 titles the long way). Needs migration 20261026120000 (the column
+# media.imdb_checked_at and its partial index) applied first: without it the
+# script stops at its first page, naming the migration, and writes nothing.
+# Dispatch only. Each run drains up to `batch` titles and stops itself at the
+# time budget, inside the job's 90 minutes, with its SUMMARY line; the queue
+# shrinks as titles are stamped, so the next dispatch resumes where this one
+# stopped.
+name: Backfill IMDb ids
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch:
+        description: 'Max titles to ask TMDb about this run'
+        required: false
+        default: '20000'
+      time_budget_min:
+        description: 'Minutes after the start when the run stops itself, with its SUMMARY (inside the 90-minute job)'
+        required: false
+        default: '80'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  backfill-imdb-ids:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill IMDb ids
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          IMDB_BACKFILL_BATCH: ${{ github.event.inputs.batch || '20000' }}
+          IMDB_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '80' }}
+        run: python -m bot.backfill_imdb_ids
