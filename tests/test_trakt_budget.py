@@ -228,11 +228,12 @@ class MainWindowEnvTest(unittest.TestCase):
                 self.assertEqual(calls[0], "A")
 
     def test_the_client_refuses_a_window_that_cannot_work(self):
-        for kwargs in ({"window_calls": 0}, {"window_seconds": 0}):
+        for kwargs in ({"window_calls": 0}, {"window_seconds": 0}, {"window_seconds": 0.5}):
             with self.subTest(**kwargs), self.assertRaises(ValueError):
                 trakt_mod.TraktClient(client_id="fake-trakt-client-id", monotonic=lambda: 0.0, **kwargs)
-        trakt_mod.TraktClient(client_id="fake-trakt-client-id", monotonic=lambda: 0.0,
-                              window_calls=1, window_seconds=1)   # control: the smallest that works
+        with mock.patch.object(trakt_mod, "RateLimiter", _NoLimiter):   # no real clock read, even here
+            trakt_mod.TraktClient(client_id="fake-trakt-client-id", monotonic=lambda: 0.0,
+                                  window_calls=1, window_seconds=1)   # control: the smallest that works
 
 
 # ── B5.2 · 0b's review: the echo, the orders, the edges ─────────────────

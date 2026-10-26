@@ -80,6 +80,20 @@ def redact_query(text: str) -> str:
     return _QUERY_STRING.sub("", text)
 
 
+def _redacted(exc: requests.RequestException) -> requests.RequestException:
+    """*exc* again, its message without query strings, its response and
+    request kept (resolve_id reads the response's status). The same object
+    when there is nothing to cut."""
+    text = redact_query(str(exc))
+    if text == str(exc):
+        return exc
+    keep = {"response": getattr(exc, "response", None), "request": getattr(exc, "request", None)}
+    try:
+        return type(exc)(text, **keep)
+    except Exception:
+        return requests.RequestException(text, **keep)
+
+
 def load_env() -> dict[str, str]:
     required = ["TRAKT_CLIENT_ID"]
     config: dict[str, str] = {}
@@ -107,8 +121,8 @@ class TraktClient:
         time.monotonic. All three are injected by tests; the real clocks and
         time.sleep otherwise. At most *window_calls* requests go out in any
         *window_seconds* (B5.2); both must be at least 1."""
-        if window_calls < 1 or window_seconds <= 0:
-            raise ValueError(f"window_calls must be >= 1 and window_seconds > 0 (got {window_calls}, {window_seconds})")
+        if window_calls < 1 or window_seconds < 1:
+            raise ValueError(f"window_calls and window_seconds must be >= 1 (got {window_calls}, {window_seconds})")
         self.client_id = client_id
         self._headers = {
             "trakt-api-key": client_id,
@@ -246,14 +260,16 @@ class TraktClient:
                 status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
                 if status is not None and 400 <= status < 500:
                     print(f"[TRAKT] {status} for {url} — not retrying (client error).")
-                    raise
+                    raise _redacted(exc) from None  # its message quoted the URL's query
 
                 last_exc = exc
                 print(f"[TRAKT] Request failed (attempt {attempt}/{retries}): {redact_query(str(exc))}")
                 if attempt < retries:
                     self._sleep(2)
 
-        raise last_exc  # type: ignore[misc]
+        # The error's message is printed again by whoever catches it, or by
+        # Python's traceback when Phase A lets it out: no query string in it.
+        raise (_redacted(last_exc) if isinstance(last_exc, requests.RequestException) else last_exc) from None
 
     def _wait_for_budget(self) -> None:
         """The sliding window: drop the send times older than window_seconds;

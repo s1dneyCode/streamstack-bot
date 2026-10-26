@@ -306,6 +306,35 @@ class NoValueLeaksTest(unittest.TestCase):
         self.assertIn("Request failed (attempt 3/3): 500 Server Error: Internal Server Error for url: "
                       f"{BASE}/movies/watched/weekly", text)
 
+    def test_no_query_string_reaches_the_raised_error_either(self):
+        # Phase A's list fetches raise out of main() by design: Python prints
+        # the error's message in the traceback, so it must carry no query.
+        for status, reason in ((500, "Internal Server Error"), (401, "Unauthorized")):
+            def answer(url, headers=None, params=None, timeout=None, status=status, reason=reason):
+                full = requests.Request("GET", url, params=params).prepare().url
+                response = _response(status, {"error": "no"}, full)
+                response.reason = reason
+                return response
+
+            with self.subTest(status=status):
+                mono, out = _Mono(), io.StringIO()
+                with mock.patch.object(trakt_mod, "TRAKT_BASE", BASE), \
+                        mock.patch.object(trakt_mod, "RateLimiter", _NoLimiter), \
+                        mock.patch.object(trakt_mod.requests, "get", answer), \
+                        mock.patch.object(trakt_mod.time, "sleep", mono.sleep), contextlib.redirect_stdout(out):
+                    client = trakt_mod.TraktClient(client_id="fake-trakt-client-id", monotonic=mono)
+                    try:
+                        client.get_most_watched("movie", "weekly", 1, 100)
+                    except requests.HTTPError as exc:
+                        raised, shown = exc, traceback.format_exc()
+                self.assertNotIn("extended=full", shown)
+                self.assertNotIn("limit=100", str(raised))
+                # Positive controls: the status and the path are still there, and
+                # the response still rides on the error (resolve_id reads its status).
+                self.assertIn(f"{status} Client Error" if status < 500 else f"{status} Server Error", shown)
+                self.assertIn(f"for url: {BASE}/movies/watched/weekly", shown)
+                self.assertEqual(raised.response.status_code, status)
+
     def test_no_query_string_reaches_the_drains_failure_line(self):
         from bot import sync_trakt
         from tests.test_trakt_write_and_decay import _WriteDb

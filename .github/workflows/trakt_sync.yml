@@ -11,9 +11,9 @@
 # (trakt_replace_related, migration 20261025160000). Trakt sends this client no
 # X-Ratelimit header (run #26: nine 429s, 300 s Retry-After each), so the client
 # keeps its own budget, 420 requests per 300 s (window_calls below; B5.2),
-# lowered to 315 after a run's first 429. The drain stops itself at the time
-# budget, 80 minutes, inside the job's 90 — so a run always ends with its
-# SUMMARY line.
+# lowered to 75 % (315 at the default) after a run's first 429. The drain
+# stops itself at the time budget, 80 minutes, inside the job's 90 — so a run
+# always ends with its SUMMARY line.
 # 02:17 UTC, off the top of the hour: GitHub documents that :00 schedules are
 # the ones delayed, and the 03:00 run of 25/10 started five hours late, on top
 # of the other daily jobs.
@@ -34,7 +34,7 @@ on:
         required: false
         default: '80'
       window_calls:
-        description: "Max Trakt requests in any 300 s, the client's own budget (lowered to 75 % after a 429)"
+        description: "Max Trakt requests in any 300 s, the client's own budget (lowered to 75 %, never below 100, after a run's first 429)"
         required: false
         default: '420'
 
