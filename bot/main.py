@@ -187,15 +187,23 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print("\n[BOT] Step 7: Combining and deduplicating results...")
     combined: list[dict] = []
-    seen_ids: set[int] = set()
+    seen_types: dict[int, str] = {}
+    # B5.5: public.media holds one row per number (UNIQUE tmdb_id) whatever
+    # the type, while TMDb numbers movies and shows separately — so the
+    # number-only dedup keeps whichever list comes first and drops a title of
+    # the other type with the same number. Counted (SUMMARY dedup_cross_type),
+    # not kept: the catalog cannot hold both.
+    dedup_cross_type: set[int] = set()
 
     for item in (now_playing + trending_movies + on_air + trending_tv + upcoming
                  + popular_movies + popular_tv + top_rated
                  + discover_movies_revenue + discover_movies_votes + top_rated_tv + discover_tv_votes):
         tid = item["tmdb_id"]
-        if tid not in seen_ids:
-            seen_ids.add(tid)
+        if tid not in seen_types:
+            seen_types[tid] = item["media_type"]
             combined.append(item)
+        elif seen_types[tid] != item["media_type"]:
+            dedup_cross_type.add(tid)
 
     print(f"[BOT] {len(combined)} unique titles after deduplication.")
 
@@ -221,6 +229,14 @@ def main() -> None:
 
     step8b_refreshed = 0
     step8b_errors    = 0
+    # B5.5: a candidate whose number is stored as the OTHER type is never
+    # refreshed — until then this wrote a show's poster onto the movie stored
+    # under its number (or the reverse), and flipped it back the next night
+    # the right one was seen. skipped_other_type counts every such candidate
+    # Step 8 skipped (a title the catalog cannot hold today);
+    # cross_type_collisions, those whose poster would have been written.
+    skipped_other_type    = 0
+    cross_type_collisions = 0
     for item in existing_items:
         tmdb_id = item["tmdb_id"]
         try:
@@ -228,7 +244,13 @@ def main() -> None:
             if stored is None:
                 continue
             fresh = item.get("poster_path")
-            if fresh and poster_basename(fresh) != poster_basename(stored.get("poster_path")):
+            changed = bool(fresh) and poster_basename(fresh) != poster_basename(stored.get("poster_path"))
+            if stored.get("media_type") != item["media_type"]:
+                skipped_other_type += 1
+                if changed:
+                    cross_type_collisions += 1
+                continue
+            if changed:
                 if refresh_poster(db, tmdb_id, stored["id"], fresh):
                     step8b_refreshed += 1
         except Exception as exc:
@@ -237,7 +259,8 @@ def main() -> None:
 
     print(
         f"[BOT] Step 8b: refreshed {step8b_refreshed} poster(s) of "
-        f"{len(existing_items)} existing titles seen tonight ({step8b_errors} errors)."
+        f"{len(existing_items)} existing titles seen tonight "
+        f"({cross_type_collisions} cross-type collisions skipped, {step8b_errors} errors)."
     )
 
     # ------------------------------------------------------------------ #
@@ -883,7 +906,9 @@ def main() -> None:
     )
     print(
         f"\n[BOT] SUMMARY discovered={len(combined)} new_inserted={step9_inserted} "
-        f"reverified={reverified} enriched={rt_updated + rt_recovered} errors={total_errors}"
+        f"reverified={reverified} enriched={rt_updated + rt_recovered} errors={total_errors} "
+        f"dedup_cross_type={len(dedup_cross_type)} skipped_other_type={skipped_other_type} "
+        f"cross_type_collisions={cross_type_collisions}"
     )
 
 

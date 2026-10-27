@@ -757,10 +757,17 @@ class SupabaseClient:
 
     def get_media_poster_state_by_tmdb_ids(self, tmdb_ids: list[int]) -> dict[int, dict]:
         """
-        Return {tmdb_id: {"id": media_id, "poster_path": stored_poster_path}}
-        for whichever of *tmdb_ids* already exist in public.media. Used by
-        main.py's Step 8b to detect when TMDB's primary poster has changed
-        for a title already in the catalog, without a second per-title query.
+        Return {tmdb_id: {"id": media_id, "poster_path": stored_poster_path,
+        "media_type": stored_media_type}} for whichever of *tmdb_ids* already
+        exist in public.media. Used by main.py's Step 8b to detect when TMDB's
+        primary poster has changed for a title already in the catalog, without
+        a second per-title query.
+
+        media_type since B5.5: tmdb_id is one UNIQUE column here, but TMDb
+        numbers movies and shows separately, so the stored row under a
+        candidate's number can be the other type — Step 8b must not write a
+        show's poster onto a movie (or the reverse). One column more on the
+        same read, rather than a second one through get_catalog_tmdb_index.
 
         Chunked at 200 ids per request, same as get_media_ids_by_tmdb_ids
         above — a 1000-id .in_() list produces an ~8 KB query URL, which can
@@ -775,7 +782,7 @@ class SupabaseClient:
             try:
                 response = (
                     self.client.table("media")
-                    .select("id, tmdb_id, poster_path")
+                    .select("id, tmdb_id, poster_path, media_type")
                     .in_("tmdb_id", chunk)
                     .execute()
                 )
@@ -783,7 +790,8 @@ class SupabaseClient:
                 print(f"[Supabase] Error looking up poster state for a chunk of tmdb_ids: {exc}")
                 continue
             for row in response.data or []:
-                index[row["tmdb_id"]] = {"id": row["id"], "poster_path": row.get("poster_path")}
+                index[row["tmdb_id"]] = {"id": row["id"], "poster_path": row.get("poster_path"),
+                                         "media_type": row.get("media_type")}
         return index
 
     def set_tmdb_missing(self, media_id: int) -> None:
