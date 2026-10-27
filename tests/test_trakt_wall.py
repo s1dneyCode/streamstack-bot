@@ -309,8 +309,8 @@ class NoValueLeaksTest(unittest.TestCase):
     def test_no_query_string_reaches_the_raised_error_either(self):
         # Phase A's list fetches raise out of main() by design: Python prints
         # the error's message in the traceback, so it must carry no query.
-        # The client error is a 403 since B5.5: a 401 ends the run (test_fail_fast_401).
-        for status, reason in ((500, "Internal Server Error"), (403, "Forbidden")):
+        # The client error is a 400 since B5.6: a 401 or a 403 ends the run (test_fail_fast_401).
+        for status, reason in ((500, "Internal Server Error"), (400, "Bad Request")):
             def answer(url, headers=None, params=None, timeout=None, status=status, reason=reason):
                 full = requests.Request("GET", url, params=params).prepare().url
                 response = _response(status, {"error": "no"}, full)

@@ -179,8 +179,9 @@ class ResolveIdTest(unittest.TestCase):
     def test_only_a_404_is_unresolved_any_other_4xx_propagates(self):
         # A bad key or a refused request must never read as "no such title":
         # Phase B would write zero rows and stamp the whole batch. (A 401
-        # ends the run since B5.5 — test_fail_fast_401 — so it is not here.)
-        for status in (400, 403):
+        # ends the run since B5.5, and a 403 since B5.6 — test_fail_fast_401
+        # — so neither is here; 422 took the 403's place.)
+        for status in (400, 422):
             with self.subTest(status=status):
                 router = _Router({"/search/tmdb/1416": (status, {"error": "no"})})
                 with _client(router) as client, self.assertRaises(requests.HTTPError):
@@ -244,7 +245,8 @@ class PhaseBTest(unittest.TestCase):
 
     def test_a_refused_lookup_writes_nothing_and_stamps_nothing(self):
         # Any 4xx but 404, or an exhausted 429, is an error — never "unresolved".
-        for status in (403, 429):
+        # (A 400 since B5.6: a 401 or a 403 ends the run, test_fail_fast_401.)
+        for status in (400, 429):
             with self.subTest(status=status):
                 router = _Router({"/search/tmdb/693134": (status, {})})
                 db = _FakeDb([_row()])

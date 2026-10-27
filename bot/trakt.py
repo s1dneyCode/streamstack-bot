@@ -187,8 +187,8 @@ class TraktClient:
         times; a non-429 4xx is raised immediately on the first attempt —
         it can't succeed just by asking again. Raises the final exception
         if all attempts are exhausted (or immediately, for a non-retryable
-        4xx). A 401 ends the run instead (B5.5): one line naming
-        TRAKT_CLIENT_ID, then exit 1.
+        4xx). A 401 (B5.5) or a 403 (B5.6) ends the run instead: one line
+        naming TRAKT_CLIENT_ID, then exit 1.
 
         Returns the raw response (not .json()) so callers can also read
         response headers — needed by _get_list() for Trakt's
@@ -245,10 +245,16 @@ class TraktClient:
                     # here the trakt-api-key. Nothing below prints or raises it.
                     exc = requests.exceptions.InvalidHeader("a request header is malformed (value withheld)")
                 status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
-                if status == 401:
+                if status in (401, 403):
                     # B5.5: a refused credential fails every request alike —
                     # end the run rather than spend its budget title by title.
-                    print(f"[TRAKT] ERROR: 401 Unauthorized for {url} — Trakt refused TRAKT_CLIENT_ID; "
+                    # B5.6: the 403 too — Trakt's answer to an invalid API key
+                    # or an unapproved app on the public endpoints this client
+                    # calls; its 401 is "OAuth must be provided" (the line is
+                    # B5.5's).
+                    refused = ("401 Unauthorized", "TRAKT_CLIENT_ID") if status == 401 \
+                        else ("403 Forbidden", "TRAKT_CLIENT_ID or the app")
+                    print(f"[TRAKT] ERROR: {refused[0]} for {url} — Trakt refused {refused[1]}; "
                           "stopping the run (exit 1).")
                     sys.exit(1)
                 if status is not None and 400 <= status < 500:
