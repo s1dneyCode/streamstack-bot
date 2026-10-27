@@ -21,8 +21,12 @@
 # X-Ratelimit header (run #26: nine 429s, 300 s Retry-After each), so the client
 # keeps its own budget, 420 requests per 300 s (window_calls below; B5.2),
 # lowered to 75 % (315 at the default) after a run's first 429. The drain
-# stops itself at the time budget, 80 minutes, inside the job's 90 — so a run
-# always ends with its SUMMARY line.
+# stops itself at the time budget, 80 minutes, inside the job's 100 (90 until
+# B5.6) — so a run ends with its SUMMARY line. The margin holds a request in
+# flight at minute 80: one 5-minute budget window, its two Retry-After at
+# 300 s and ≈ 3 minutes of setup before the budget's clock starts, 80 + 5 + 10
+# + 3 = 98. A title makes up to three requests: one that met two 429s on each
+# could still run past 100.
 # 02:17 UTC, off the top of the hour: GitHub documents that :00 schedules are
 # the ones delayed, and the 03:00 run of 25/10 started five hours late, on top
 # of the other daily jobs.
@@ -39,7 +43,7 @@ on:
         required: false
         default: '5000'
       time_budget_min:
-        description: 'Minutes after the start when the drain stops itself, with its SUMMARY (inside the 90-minute job)'
+        description: 'Minutes after the start when the drain stops itself, with its SUMMARY (inside the 100-minute job)'
         required: false
         default: '80'
       window_calls:
@@ -54,7 +58,7 @@ concurrency:
 jobs:
   trakt-sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

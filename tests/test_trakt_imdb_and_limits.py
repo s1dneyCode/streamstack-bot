@@ -9,7 +9,7 @@ Unit tests for the Trakt client and the drain made to fit their window
     and, at TRAKT_RATELIMIT_FLOOR or below, pauses the next request until
     the header's `until` (1–300 s, on an injected clock) instead of running
     into a 300 s 429;
-  - a time budget (TRAKT_TIME_BUDGET_MIN, default 80, inside the job's 90)
+  - a time budget (TRAKT_TIME_BUDGET_MIN, default 80, inside the job's 100)
     stops the drain before the next title or slice, green, with its SUMMARY.
 
 Fakes only: requests.get routed in memory (tests/test_trakt_related.py's

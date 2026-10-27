@@ -3,18 +3,24 @@ Unit tests for Trakt Sync's schedule (RUN B5 · 0c, moved by B5.1 · 0c): daily
 while the backlog is re-drained — decision 1.439 — at 02:17 UTC, off the top of
 the hour that GitHub delays (run #24 of the 03:00 schedule started five hours
 late, on top of the other daily jobs), with 5,000 related titles a run (3,000
-until B5.4) and a time budget of 80 minutes inside the job's 90.
+until B5.4) and a time budget of 80 minutes inside the job's 100 (90 until
+B5.6).
 
 What moved in B5.1: the cron (0 3 * * * → 17 2 * * *), the header's numbers
 (56,411 / ≈ 19 days → 131,456 pending / ≈ 44 days), and two new pins — the
 budget the workflow passes, and the code's defaults matching what the workflow
 passes.
 
+What moved in B5.6: timeout-minutes 90 → 100, and its pin asserts the margin
+— the budget, one window and two capped Retry-After from the code's own
+constants, plus a setup allowance — instead of the number.
+
 The workflow is read as TEXT: the CI tests job installs only requirements.txt,
 which carries no YAML library. Run from the repo root:
     python -m unittest discover -s tests -t . -v
 """
 
+import inspect
 import pathlib
 import re
 import unittest
@@ -22,6 +28,9 @@ import unittest
 from bot import sync_trakt, trakt
 
 WORKFLOW = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "trakt_sync.yml"
+# Checkout, setup-python and pip install before the budget's clock starts:
+# 1–2 minutes measured, 3 allowed (B5.6).
+SETUP_ALLOWANCE_MIN = 3
 
 
 def active_crons(text: str) -> list[str]:
@@ -48,6 +57,28 @@ def on_the_hour(cron: str) -> bool:
 def header(text: str) -> str:
     """The comment block above `name:`."""
     return text.split("name:", 1)[0]
+
+
+def job_timeout_minutes(text: str) -> int:
+    """The one job's timeout-minutes."""
+    found = re.findall(r"^\s*timeout-minutes:\s*(\d+)\s*$", text, re.M)
+    if len(found) != 1:
+        raise AssertionError(f"expected one timeout-minutes, found {found}")
+    return int(found[0])
+
+
+def worst_case_minutes() -> float:
+    """The job's margin, from the code's own numbers and the setup allowance
+    (B5.6): the time budget, then a request in flight that waits one full
+    budget window and a capped Retry-After on each of its retries, plus the
+    setup — checkout, setup-python and pip install run before main() starts
+    the budget's clock. One request's worst case, not a title's: a title makes
+    up to three requests."""
+    retries = inspect.signature(trakt.TraktClient._request).parameters["retries"].default
+    return (sync_trakt.DEFAULT_TRAKT_TIME_BUDGET_MIN
+            + trakt.DEFAULT_WINDOW_SECONDS / 60
+            + (retries - 1) * trakt._PAUSE_MAX_SECONDS / 60
+            + SETUP_ALLOWANCE_MIN)
 
 
 class TraktSyncCadenceTest(unittest.TestCase):
@@ -78,12 +109,19 @@ class TraktSyncCadenceTest(unittest.TestCase):
         self.assertIn("TRAKT_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '80' }}", self.text)
 
     def test_the_budget_ends_inside_the_jobs_timeout(self):
-        timeout = re.search(r"timeout-minutes:\s*(\d+)", self.text)
+        # B5.6: the pin is the margin, not a number (it asserted 90 until
+        # then): 80 + 5 + 10 + 3 = 98 minutes inside the job's timeout. The
+        # budget is the code's default, which is what the workflow passes.
         budget = re.search(r"time_budget_min \|\| '(\d+)'", self.text)
-        self.assertIsNotNone(timeout)
         self.assertIsNotNone(budget, "the workflow passes no TRAKT_TIME_BUDGET_MIN")
-        self.assertEqual(int(timeout.group(1)), 90)
-        self.assertLess(int(budget.group(1)), int(timeout.group(1)))
+        self.assertEqual(int(budget.group(1)), sync_trakt.DEFAULT_TRAKT_TIME_BUDGET_MIN)
+        self.assertLessEqual(worst_case_minutes(), job_timeout_minutes(self.text))
+
+    def test_the_margin_pin_bites_on_the_old_90(self):
+        # Positive control: the same arithmetic against B5.5's 90 fails.
+        old = re.sub(r"timeout-minutes:\s*\d+", "timeout-minutes: 90", self.text)
+        self.assertEqual(job_timeout_minutes(old), 90)
+        self.assertGreater(worst_case_minutes(), job_timeout_minutes(old))
 
     def test_the_codes_defaults_are_what_the_workflow_passes(self):
         # A run started without the env (by hand, outside Actions) drains the same.

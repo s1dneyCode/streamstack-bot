@@ -91,12 +91,14 @@ TRAKT_RELATED_FIX_DATE = "2026-10-24T16:00:00Z"
 # PostgREST trims every response to 1,000 rows, the RPC's included (B3).
 RELATED_SLICE = 1000
 # Phase B stops before the next title or slice once this many minutes have
-# passed since the run's start (B5.1) — inside the job's timeout-minutes 90,
-# so a run ends with its SUMMARY instead of being killed mid-title.
+# passed since the run's start (B5.1) — inside the job's timeout-minutes 100
+# (90 until B5.6), so a run ends with its SUMMARY instead of being killed mid-title.
 DEFAULT_TRAKT_TIME_BUDGET_MIN = 80
-# The longest TRAKT_WINDOW_SECONDS a run accepts (B5.2): one budget wait lasts
-# at most a window, and the job's timeout-minutes 90 leave 10 minutes past
-# the 80-minute budget.
+# The longest TRAKT_WINDOW_SECONDS a run accepts (B5.2, when the job's 90
+# minutes left 10 past the 80-minute budget): one budget wait lasts at most a
+# window. trakt_sync.yml passes none, so its runs keep the 300 s default — the
+# 5 minutes of the job's margin, 80 + 5 + two Retry-After at 300 s + ≈ 3 of
+# setup = 98 of its 100 (B5.6). A 600 s window, by hand, makes that sum 103.
 MAX_TRAKT_WINDOW_SECONDS = 600
 # A well-formed IMDB id: Trakt's /related takes it in the id slot, so a title
 # that has one costs one Trakt call instead of resolve + /related (B5.1).
@@ -485,8 +487,8 @@ def main(clock=None) -> None:
     window_calls = int(os.environ.get("TRAKT_WINDOW_CALLS", DEFAULT_WINDOW_CALLS))
     window_seconds = int(os.environ.get("TRAKT_WINDOW_SECONDS", DEFAULT_WINDOW_SECONDS))
     # Fail fast on a window that cannot work, before Phase A writes anything:
-    # no calls at all, no window at all, or a window whose single wait could
-    # outrun the 10 minutes between the 80-minute budget and the job's 90.
+    # no calls at all, no window at all, or one longer than
+    # MAX_TRAKT_WINDOW_SECONDS (see there).
     if window_calls < 1:
         print(f"[TRAKT SYNC] ERROR: TRAKT_WINDOW_CALLS must be at least 1 (got {window_calls}).")
         sys.exit(1)
