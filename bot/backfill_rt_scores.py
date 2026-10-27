@@ -9,7 +9,8 @@ by the row's id — never by tmdb_id, which a show can share with the movie —
 the id and imdb_checked_at for FOUND, imdb_checked_at alone for NONE and
 MISSING, nothing for ERROR; a failed write leaves the row unstamped and the
 phase goes on.
-Phase 2: update RT scores using OMDb, with imdb_id as the primary lookup strategy.
+Phase 2: update RT scores using OMDb, with imdb_id as the primary lookup
+strategy, written by the row's id since B5.5 (by tmdb_id until then).
 
 By default, Phase 2 only processes movies where rt_score IS NULL (cheap
 enough to run after every bulk import). Pass --force to re-check every
@@ -125,7 +126,6 @@ def main(clock=None) -> None:
     not_found = 0
 
     for i, row in enumerate(rows, start=1):
-        tmdb_id = row["tmdb_id"]
         title   = row["title"]
         year    = extract_year(row.get("release_date"))
         imdb_id = row.get("imdb_id")
@@ -133,7 +133,9 @@ def main(clock=None) -> None:
         score = omdb.get_rt_score(title=title, year=year, imdb_id=imdb_id)
 
         if score is not None:
-            db.client.table("media").update({"rt_score": score}).eq("tmdb_id", tmdb_id).execute()
+            # By the row's id since B5.5, as phase 1: never by tmdb_id, the
+            # number a show can share with this movie.
+            db.client.table("media").update({"rt_score": score}).eq("id", row["id"]).execute()
             print(f"[RT_BACKFILL] {i}/{total} {title} ({year}): {score}%")
             updated += 1
         else:

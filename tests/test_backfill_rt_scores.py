@@ -63,7 +63,11 @@ class _Query:
         rows = [r for r in self.t.rows if all(r.get(col) == value for _, (col, value), _ in self.named("eq"))]
         update = self.named("update")
         if update:
-            if any(value in self.t.fail_writes for _, (_col, value), _ in self.named("eq")):
+            failing = [value for _, (_col, value), _ in self.named("eq") if value in self.t.fail_writes]
+            if failing:
+                # One dropped connection, once: since B5.5 phase 2 writes by
+                # the same id, and a later write to that row goes through.
+                self.t.fail_writes.discard(failing[0])
                 raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
             for r in rows:
                 r.update(update[0][1][0])
@@ -226,6 +230,21 @@ class Phase1WritesByIdTest(unittest.TestCase):
         self.assertEqual(omdb.asked, [{"title": "Title 1", "year": "2020", "imdb_id": "tt0413573"}])
         self.assertEqual(db.rows[0]["rt_score"], 91)
         self.assertIn("[RT_BACKFILL] Done. 1 updated, 0 not found", out)
+
+
+class Phase2WritesByIdTest(unittest.TestCase):
+    """B5.5 · 0c(1): phase 2 wrote rt_score with .eq("tmdb_id", …) — the
+    number a show can share with the movie. Now by the row's id."""
+
+    def test_the_score_lands_on_that_movie_only(self):
+        movie, show = _row(1, 1416, imdb_id="tt0413573"), _row(2, 1416, media_type="tv")
+        db = _Db([movie, show])
+        _main(db, _Tmdb({}), _Omdb(score=88))
+
+        self.assertEqual(movie["rt_score"], 88)                           # positive control: the movie is scored
+        self.assertIsNone(show["rt_score"])                               # the show with its number is not
+        writes = [q for q in db.executed if q.named("update") and "rt_score" in q.named("update")[0][1][0]]
+        self.assertEqual([q.named("eq")[0][1] for q in writes], [("id", "m-00001")])
 
 
 if __name__ == "__main__":
