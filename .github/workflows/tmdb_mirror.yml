@@ -1,0 +1,64 @@
+# TMDb Mirror (B5.8): every image the app still loads from image.tmdb.org,
+# copied once to our own Storage — backdrops at w1280, title logos at w500,
+# cast and crew photos at w185 — at media-images/tmdb/{size}/{file}, under
+# TMDb's own file name, byte for byte, with a one-year cache (decided 27/10:
+# the app reads everything from our side). It reads media and media_credits
+# only through its RPCs, writes only its ledger, and never deletes a file.
+# Needs migration tmdb_image_mirror (public.tmdb_image_mirror and the RPCs
+# tmdb_mirror_titles / tmdb_mirror_missing) applied first: without it the
+# script stops at its first call, naming the migration, and uploads nothing.
+# Hourly so a title that gains a backdrop, a logo or a cast is mirrored within
+# the hour once the first copy has drained; at :11, off the top of the hour
+# that GitHub delays and away from Posters HD's :41. Every run sweeps the
+# catalogue from its first page, and the ledger makes a page already copied
+# cost a few cheap calls (about five), so an hour with nothing new walks every
+# page and ends in minutes — the first runs measure how many — with copied=0
+# in its SUMMARY. A run stops itself at the time budget or the file cap,
+# inside the job's 90 minutes, and the next one continues where the ledger
+# says; while the first copy drains, a dispatch may ask up to 80 minutes (and
+# a larger max_files). TMDb's image CDN needs no key, so the job's only
+# secrets are the two Supabase ones, on the step that runs the script.
+name: TMDb Mirror
+
+on:
+  schedule:
+    - cron: '11 * * * *'  # hourly at :11 UTC
+  workflow_dispatch:
+    inputs:
+      time_budget_min:
+        description: 'Minutes after the start when the run stops itself, with its SUMMARY (at most 80, inside the 90-minute job)'
+        required: false
+        default: '25'
+      max_files:
+        description: 'Max files to fetch this run (copied, missing or errors)'
+        required: false
+        default: '20000'
+      workers:
+        description: 'Files fetched and uploaded at once (1-16)'
+        required: false
+        default: '6'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  tmdb-mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Mirror TMDb images
+        env:
+          PYTHONUNBUFFERED: '1'
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TMDB_MIRROR_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '25' }}
+          TMDB_MIRROR_MAX_FILES: ${{ github.event.inputs.max_files || '20000' }}
+          TMDB_MIRROR_WORKERS: ${{ github.event.inputs.workers || '6' }}
+        run: python -m bot.tmdb_mirror
