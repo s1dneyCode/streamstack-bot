@@ -8,8 +8,11 @@ the raw API response shape.
 Reference: https://developer.themoviedb.org/reference/intro/getting-started
 """
 
+import math
 import re
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import NamedTuple
 
 import requests
@@ -25,6 +28,13 @@ POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 # Conservative throttle — TMDB's documented limit is much higher (~50 req/s);
 # this keeps us well clear of it without needing per-call time.sleep()s.
 TMDB_RATE_LIMIT = 20.0  # requests/second
+
+# A 429's wait when Retry-After is absent or not understood, and the bounds of
+# any wait it asks for — bot/trakt.py's since B5.3 (B5.5: Retry-After may be
+# seconds or an HTTP date, and float() on a date raised out of _get).
+_RETRY_AFTER_DEFAULT_SECONDS = 2.0
+_RETRY_AFTER_MIN_SECONDS = 1.0
+_RETRY_AFTER_MAX_SECONDS = 300.0
 
 # Regions get_watch_providers() returns by default. The /watch/providers
 # response already contains every country in one call, so adding a region
@@ -63,11 +73,15 @@ def _extract_producers(crew: list[dict]) -> list[dict]:
 class TmdbClient:
     """Thin wrapper around the TMDB REST API."""
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, clock=None) -> None:
+        """*clock* returns the current instant (aware UTC), against which a
+        429's Retry-After date is read; injected by tests, the real clock
+        otherwise."""
         # The API key is passed as a query parameter on every request
         self.api_key = api_key
         self._genre_cache: dict[str, dict[int, str]] = {}
         self._limiter = RateLimiter(rate=TMDB_RATE_LIMIT)
+        self._clock = clock if clock is not None else (lambda: datetime.now(timezone.utc))
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -105,8 +119,7 @@ class TmdbClient:
             try:
                 response = requests.get(url, params=merged_params, timeout=15)
                 if response.status_code == 429:
-                    retry_after = response.headers.get("Retry-After")
-                    wait = float(retry_after) if retry_after else 2.0
+                    wait = self._retry_after_seconds(response.headers.get("Retry-After"))
                     print(f"[TMDB] Rate limited (429, attempt {attempt}/{retries}) — waiting {wait}s...")
                     last_exc = requests.HTTPError(f"429 Too Many Requests: {url}")
                     if attempt < retries:
@@ -133,6 +146,32 @@ class TmdbClient:
 
         # Whoever catches it prints it, or Python's traceback does: no api_key in it.
         raise (redact_exception(last_exc) if isinstance(last_exc, requests.RequestException) else last_exc) from None
+
+    def _retry_after_seconds(self, raw: str | None) -> float:
+        """A 429's Retry-After as seconds — a number, or an HTTP date read
+        against the injected clock — bounded to 1–300 s. Absent: the 2.0 s
+        default. Not understood: the default and one line. The shape of
+        TraktClient._retry_after_seconds (B5.3); until B5.5 this was
+        float(Retry-After), and a date raised a ValueError out of _get."""
+        if not raw:
+            return _RETRY_AFTER_DEFAULT_SECONDS
+        try:
+            seconds = float(raw)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(raw)
+            except (TypeError, ValueError, IndexError):
+                when = None
+            if when is None:
+                print(f"[TMDB] Retry-After {raw[:80]!r} not understood — waiting {_RETRY_AFTER_DEFAULT_SECONDS} s")
+                return _RETRY_AFTER_DEFAULT_SECONDS
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            seconds = (when - self._clock()).total_seconds()
+        if math.isnan(seconds):
+            print(f"[TMDB] Retry-After {raw[:80]!r} not understood — waiting {_RETRY_AFTER_DEFAULT_SECONDS} s")
+            return _RETRY_AFTER_DEFAULT_SECONDS
+        return min(max(seconds, _RETRY_AFTER_MIN_SECONDS), _RETRY_AFTER_MAX_SECONDS)
 
     # ------------------------------------------------------------------
     # Public methods
