@@ -96,11 +96,14 @@ def load_env() -> dict[str, str]:
 
 
 # The queue RPC's retry (B3.1): three attempts, 2 s then 4 s apart, on a
-# transient failure only — see fetch_queue's docstring.
+# transient failure only — see fetch_queue's docstring. '57014' since B5.5: a
+# statement cancelled by PostgREST's 8 s statement_timeout, the server under
+# load — transient in the related queue's retry since B5.1
+# (supabase_client._TRANSIENT_RPC_CODES), and here now in the same shape.
 _QUEUE_ATTEMPTS = 3
 _QUEUE_RETRY_DELAYS = (2, 4)
 _TRANSIENT_QUEUE_CODES = {"503", "520", "521", "522", "523", "524",
-                          "PGRST000", "PGRST001", "PGRST002", "PGRST003"}
+                          "PGRST000", "PGRST001", "PGRST002", "PGRST003", "57014"}
 _TRANSIENT_QUEUE_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 
 
@@ -120,8 +123,9 @@ def fetch_queue(db, limit: int) -> list[dict]:
 
     A TRANSIENT failure is retried here (B3.1): a 5xx from PostgREST or
     Cloudflare — 503 and 520–524, which postgrest reports as APIError.code
-    when the body is not JSON, and PostgREST's own PGRST000–PGRST003 for a
-    connection or pool failure — or a dropped or timed-out connection
+    when the body is not JSON, PostgREST's own PGRST000–PGRST003 for a
+    connection or pool failure, and since B5.5 57014 (the statement timeout)
+    — or a dropped or timed-out connection
     (httpx's TimeoutException, NetworkError, RemoteProtocolError). Three
     attempts in all, 2 s then 4 s apart, one log line per retry —
     "queue RPC failed (attempt N of 3): <class>: <message> (code C) —

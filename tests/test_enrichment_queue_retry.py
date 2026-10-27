@@ -124,6 +124,40 @@ class QueueRetryTest(unittest.TestCase):
         self.assertEqual(len(out.splitlines()), 2)
 
 
+STATEMENT_TIMEOUT = "canceling statement due to statement timeout"
+
+
+class QueueStatementTimeoutTest(unittest.TestCase):
+    """B5.5 · 0c(6): a 57014 (PostgREST's 8 s statement_timeout, the server
+    under load) is transient here too, as in the related queue's retry since
+    B5.1 (_TRANSIENT_RPC_CODES): the same three attempts, 2 s then 4 s."""
+
+    def test_one_statement_timeout_is_retried_once_then_rows(self):
+        result, client, sleeps, out = _fetch([_postgrest("57014", STATEMENT_TIMEOUT), ROWS])
+
+        self.assertEqual(result, ROWS)
+        self.assertEqual(len(client.rpc_calls), 2)
+        self.assertEqual(sleeps, [2])
+        self.assertEqual(out.splitlines(), [
+            f"[ENRICH] queue RPC failed (attempt 1 of 3): APIError: {STATEMENT_TIMEOUT} (code 57014) — retrying in 2 s",
+        ])
+
+    def test_two_statement_timeouts_are_retried_as_the_related_queue_does(self):
+        result, client, sleeps, _ = _fetch([_postgrest("57014", STATEMENT_TIMEOUT)] * 2 + [ROWS])
+
+        self.assertEqual(result, ROWS)
+        self.assertEqual(len(client.rpc_calls), 3)
+        self.assertEqual(sleeps, [2, 4])
+
+    def test_three_statement_timeouts_fail_as_before(self):
+        third = _postgrest("57014", STATEMENT_TIMEOUT)
+        result, client, sleeps, _ = _fetch([_postgrest("57014", STATEMENT_TIMEOUT)] * 2 + [third])
+
+        self.assertIs(result, third)
+        self.assertEqual(len(client.rpc_calls), 3)
+        self.assertEqual(sleeps, [2, 4])
+
+
 class QueueRetryControlsTest(unittest.TestCase):
 
     def test_a_missing_function_fails_fast_at_the_first_attempt(self):

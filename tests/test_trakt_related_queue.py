@@ -108,12 +108,13 @@ class QueueRpcTest(unittest.TestCase):
 
     def test_the_retry_is_b31s_own(self):
         # Copied, not imported (enrich_new_titles must not move, and the client
-        # cannot import it): this pin keeps the two sets the same — plus ONE
-        # code since B5.1, '57014' (a statement cancelled at PostgREST's 8 s),
-        # which killed both drains of 24–25/10 inside this RPC.
+        # cannot import it): this pin keeps the two sets the same. B5.1 added
+        # '57014' (a statement cancelled at PostgREST's 8 s), which killed both
+        # drains of 24–25/10 inside this RPC, here only; B5.5 · 0c(6) added it
+        # to the enrichment's queue too, so the sets are equal again.
         from bot import enrich_new_titles
-        self.assertEqual(supabase_client._TRANSIENT_RPC_CODES, enrich_new_titles._TRANSIENT_QUEUE_CODES | {"57014"})
-        self.assertNotIn("57014", enrich_new_titles._TRANSIENT_QUEUE_CODES)  # the enrichment did not move
+        self.assertEqual(supabase_client._TRANSIENT_RPC_CODES, enrich_new_titles._TRANSIENT_QUEUE_CODES)
+        self.assertIn("57014", enrich_new_titles._TRANSIENT_QUEUE_CODES)
         self.assertEqual(supabase_client._TRANSIENT_RPC_ERRORS, enrich_new_titles._TRANSIENT_QUEUE_ERRORS)
         self.assertEqual(supabase_client._RPC_ATTEMPTS, enrich_new_titles._QUEUE_ATTEMPTS)
         self.assertEqual(supabase_client._RPC_RETRY_DELAYS, enrich_new_titles._QUEUE_RETRY_DELAYS)
