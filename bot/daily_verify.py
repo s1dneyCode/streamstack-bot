@@ -12,6 +12,11 @@ Checks (in order, each independent — a failure in one does not stop the others
                        has passed but status is still a pre-release value
                        (Planned, Post Production, In Production, Rumored).
 
+A 404 in check 2 or 3 stamps the row with set_tmdb_missing, and both checks
+leave stamped rows out of their targets (B5.5): a title gone from TMDb is
+asked once, not every day (~45 a day were, on 26/10). Check 1 asks TMDb
+nothing per title — it reads the now-playing list — so it keeps every row.
+
 Run via:
     python -m bot.daily_verify
 """
@@ -21,10 +26,17 @@ import sys
 import time
 from datetime import date, timedelta
 
+import requests
+
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient, _PRE_RELEASE_STATUSES
 
 BATCH_SIZE = 100
+
+
+def _is_404(exc: Exception) -> bool:
+    """True for TmdbClient._get's 404 (the response rides on the raised error)."""
+    return isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code == 404
 
 
 def load_env() -> dict[str, str]:
@@ -130,6 +142,7 @@ def verify_upcoming_dates(db: SupabaseClient, tmdb: TmdbClient) -> None:
             .eq("media_type", "movie")
             .gte("release_date", today_str)
             .lte("release_date", horizon)
+            .is_("tmdb_missing_at", "null")
             .range(offset, offset + BATCH_SIZE - 1)
             .execute()
             .data or []
@@ -143,11 +156,17 @@ def verify_upcoming_dates(db: SupabaseClient, tmdb: TmdbClient) -> None:
     print(f"[VERIFY]   {total} upcoming movies to re-check.")
 
     changed = 0
+    missing = 0
     for i, row in enumerate(targets, start=1):
         try:
-            detail = tmdb._get(f"/movie/{row['tmdb_id']}")
+            detail = tmdb._get(f"/movie/{row['tmdb_id']}", quiet_statuses=frozenset({404}))
         except Exception as exc:
-            print(f"[VERIFY]   {row['title']}: fetch failed — {exc}")
+            if _is_404(exc):
+                db.set_tmdb_missing(row["id"])
+                missing += 1
+                print(f"[VERIFY]   {row['title']}: 404 — gone from TMDB, flagged tmdb_missing_at.")
+            else:
+                print(f"[VERIFY]   {row['title']}: fetch failed — {exc}")
             time.sleep(0.25)
             continue
 
@@ -172,7 +191,7 @@ def verify_upcoming_dates(db: SupabaseClient, tmdb: TmdbClient) -> None:
 
         time.sleep(0.25)
 
-    print(f"[VERIFY]   Check 2 done: {changed}/{total} updated.")
+    print(f"[VERIFY]   Check 2 done: {changed}/{total} updated, {missing} flagged missing (404).")
 
 
 def verify_stale_status(db: SupabaseClient, tmdb: TmdbClient) -> None:
@@ -189,6 +208,7 @@ def verify_stale_status(db: SupabaseClient, tmdb: TmdbClient) -> None:
             .select("id, tmdb_id, title, media_type, status")
             .lte("release_date", today_str)
             .in_("status", list(_PRE_RELEASE_STATUSES))
+            .is_("tmdb_missing_at", "null")
             .range(offset, offset + BATCH_SIZE - 1)
             .execute()
             .data or []
@@ -202,12 +222,18 @@ def verify_stale_status(db: SupabaseClient, tmdb: TmdbClient) -> None:
     print(f"[VERIFY]   {total} titles with stale status to re-check.")
 
     changed = 0
+    missing = 0
     for i, row in enumerate(targets, start=1):
         try:
-            detail     = tmdb._get(f"/{row['media_type']}/{row['tmdb_id']}")
+            detail     = tmdb._get(f"/{row['media_type']}/{row['tmdb_id']}", quiet_statuses=frozenset({404}))
             new_status = detail.get("status")
         except Exception as exc:
-            print(f"[VERIFY]   {row['title']}: fetch failed — {exc}")
+            if _is_404(exc):
+                db.set_tmdb_missing(row["id"])
+                missing += 1
+                print(f"[VERIFY]   {row['title']}: 404 — gone from TMDB, flagged tmdb_missing_at.")
+            else:
+                print(f"[VERIFY]   {row['title']}: fetch failed — {exc}")
             time.sleep(0.25)
             continue
 
@@ -221,7 +247,7 @@ def verify_stale_status(db: SupabaseClient, tmdb: TmdbClient) -> None:
 
         time.sleep(0.25)
 
-    print(f"[VERIFY]   Check 3 done: {changed}/{total} updated.")
+    print(f"[VERIFY]   Check 3 done: {changed}/{total} updated, {missing} flagged missing (404).")
 
 
 def main() -> None:
