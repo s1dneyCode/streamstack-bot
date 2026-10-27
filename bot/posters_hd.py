@@ -34,8 +34,10 @@ CDN needs no key and is not the API, so there is no limiter):
     its own size (`converted`);
   - uploaded to media-images/posters-hd/{tmdb_id}/{stem}.jpg as image/jpeg
     (a versioned key per TMDb file, refresh_poster's precedent: a changed
-    poster gets a new key, so no cache serves the old one), then ONE PATCH by
-    the row's id: {"poster_hd_url": <the URL upload_image returned>}.
+    poster gets a new key, so no cache serves the old one) with a one-year
+    cache (B5.8: that versioned key is what makes a year safe), then ONE PATCH
+    by the row's id: {"poster_hd_url": <the URL upload_image returned>} —
+    skipped when that is already the stored URL.
 A failure at any step writes nothing for that title: counted, and it stays
 pending for the next run. This script never writes poster_url or poster_path,
 and never deletes a file: an HD file whose title leaves every list stays, and
@@ -44,6 +46,13 @@ so does the old file after a new stem.
 A batch cap (POSTERS_HD_BATCH, default 300) and a time budget
 (POSTERS_HD_TIME_BUDGET_MIN, default 20, inside the job's 30) end a run with
 its SUMMARY; what is left stays pending for the next hour.
+
+POSTERS_HD_REFRESH_EXISTING=true (a dispatch input, B5.8) makes every title
+that already has an HD poster — still in the set, not gone, with a
+poster_path — pending for that run, so a file made before the long cache is
+uploaded again with it; its URL does not change, so nothing is written. A
+title whose refresh fails is not retried by the hourly runs (for them it is
+not pending): dispatch again.
 
 FAILS FAST if the server has no media.poster_hd_url yet (42703, "column …
 does not exist"): one line naming migration 20261027200000, exit 1, nothing
@@ -82,6 +91,12 @@ FETCH_TIMEOUT_SECONDS = 30     # an original is a few MB
 DEFAULT_POSTERS_HD_BATCH = 300
 DEFAULT_POSTERS_HD_TIME_BUDGET_MIN = 20
 POSTER_HD_MIGRATION = "20261027200000"
+# The cache an upload asks for (B5.8), through upload_image's cache_seconds:
+# every object in media-images carried cacheControl = no-cache until then,
+# which the app's image cache reads as zero validity. A year is safe only for
+# a key versioned by its content (a TMDb file name, or its stem): a changed
+# image gets a new key. bot/tmdb_mirror.py uses it too.
+ONE_YEAR_CACHE_SECONDS = 31536000
 
 # What TMDb's CDN said for a poster's original (the shape of B5.3's
 # ImdbLookup): OK with its bytes; MISSING — 404; ERROR — anything else, with
@@ -256,7 +271,7 @@ def make_hd(db, row: dict, stats: dict, fetch=requests.get) -> None:
         _error(row, f"image unreadable ({type(exc).__name__}) — it starts like {_looks_like(got.content)}")
         return
     url = db.upload_image(BUCKET, f"{HD_PREFIX}/{row['tmdb_id']}/{file_stem(row['poster_path'])}.jpg", data,
-                          "image/jpeg")
+                          "image/jpeg", cache_seconds=ONE_YEAR_CACHE_SECONDS)
     if not url:
         stats["errors"] += 1
         _error(row, "upload failed")
@@ -264,6 +279,8 @@ def make_hd(db, row: dict, stats: dict, fetch=requests.get) -> None:
     stats["made"] += 1
     stats[kind] += 1
     stats["bytes_uploaded"] += len(data)
+    if url == row.get("poster_hd_url"):
+        return  # a refresh (B5.8): the same key, so the same URL — nothing to write
     try:
         db.client.table("media").update({"poster_hd_url": url}).eq("id", row["id"]).execute()
     except Exception as exc:
@@ -274,9 +291,10 @@ def make_hd(db, row: dict, stats: dict, fetch=requests.get) -> None:
 
 
 def run(db, *, fetch=requests.get, clock, batch: int = DEFAULT_POSTERS_HD_BATCH,
-        budget_min: int = DEFAULT_POSTERS_HD_TIME_BUDGET_MIN) -> dict:
+        budget_min: int = DEFAULT_POSTERS_HD_TIME_BUDGET_MIN, refresh_existing: bool = False) -> dict:
     """Make every pending HD poster: up to *batch* titles, until *budget_min*
-    minutes after the start on *clock* (aware UTC; injected by tests)."""
+    minutes after the start on *clock* (aware UTC; injected by tests). With
+    *refresh_existing*, a title that already has one is pending too."""
     stats = {"candidates": 0, "pending": 0, "made": 0, RESIZED: 0, FIT_AS_IS: 0, CONVERTED: 0, "missing": 0,
              "errors": 0, "no_path": 0, "gone": 0, "written": 0, "budget_hit": 0, "bytes_uploaded": 0}
     try:
@@ -298,7 +316,7 @@ def run(db, *, fetch=requests.get, clock, batch: int = DEFAULT_POSTERS_HD_BATCH,
             stats["gone"] += 1
         elif not source_url(row.get("poster_path")):
             stats["no_path"] += 1
-        elif is_pending(row):
+        elif refresh_existing or is_pending(row):
             pending.append(row)
     stats["pending"] = len(pending)
     print(f"[POSTER_HD] {stats['candidates']} title(s) can reach a slideshow, {stats['pending']} pending; "
@@ -336,9 +354,11 @@ def main(clock=None, fetch=None) -> None:
     clock = clock if clock is not None else (lambda: datetime.now(timezone.utc))
     batch = int(os.environ.get("POSTERS_HD_BATCH", DEFAULT_POSTERS_HD_BATCH))
     budget_min = int(os.environ.get("POSTERS_HD_TIME_BUDGET_MIN", DEFAULT_POSTERS_HD_TIME_BUDGET_MIN))
+    refresh_existing = os.environ.get("POSTERS_HD_REFRESH_EXISTING", "false").strip().lower() == "true"
 
     db = SupabaseClient(url=config["SUPABASE_URL"], key=config["SUPABASE_KEY"])
-    run(db, fetch=fetch if fetch is not None else requests.get, clock=clock, batch=batch, budget_min=budget_min)
+    run(db, fetch=fetch if fetch is not None else requests.get, clock=clock, batch=batch, budget_min=budget_min,
+        refresh_existing=refresh_existing)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
 """
 Unit tests for the «Posters HD» workflow (RUN B5.7 · 0b): hourly at :41 —
 off the top of the hour that GitHub delays, the reason Trakt Sync runs at
-02:17 — plus dispatch with its two inputs (batch, time_budget_min) mapped to
-the script's env with the script's own defaults; one run at a time; a
+02:17 — plus dispatch with its inputs (batch, time_budget_min, and since
+B5.8 refresh_existing) mapped to the script's env with the script's own
+defaults; one run at a time; a
 30-minute job around the 20-minute budget; Python 3.11, unbuffered; the two
 Supabase secrets by reference, on the step that runs the script and nowhere
 else, and NOT TMDB_API_KEY (TMDb's image CDN needs no key: least privilege).
@@ -95,6 +96,18 @@ class PostersHdWorkflowTest(unittest.TestCase):
         self.assertEqual(posters_hd.DEFAULT_POSTERS_HD_BATCH, 300)
         self.assertEqual(posters_hd.DEFAULT_POSTERS_HD_TIME_BUDGET_MIN, 20)
 
+    def test_refresh_existing_is_a_dispatch_input_off_by_default(self):
+        # B5.8: a dispatch with it on makes every made title pending once (the long cache reaches
+        # the 28 posters made before it); the schedule never sets it.
+        self.assertRegex(self.text, r"refresh_existing:\n(?:.*\n){0,3}?\s+default: 'false'")
+        self.assertIn("POSTERS_HD_REFRESH_EXISTING: ${{ github.event.inputs.refresh_existing || 'false' }}",
+                      self.run_step)
+        # It is one of workflow_dispatch's inputs, at their indent (six spaces), not anywhere else.
+        dispatch = self.text.split("\n  workflow_dispatch:\n    inputs:\n", 1)[-1].split("\nconcurrency:", 1)[0]
+        self.assertRegex(dispatch, r"(?m)^      refresh_existing:\n        description: .+\n"
+                                   r"        required: false\n        default: 'false'$")
+        self.assertEqual(self.text.count("refresh_existing:"), 1)
+
     def test_one_run_at_a_time(self):
         block = r"(?m)^concurrency:\n  group: \$\{\{ github\.workflow \}\}\n  cancel-in-progress: false$"
         self.assertRegex(self.text, block)
@@ -118,9 +131,10 @@ class PostersHdWorkflowTest(unittest.TestCase):
         # The step that runs the script holds every secret reference, and this env exactly.
         self.assertEqual(secrets_named(self.run_step), ["SUPABASE_KEY", "SUPABASE_URL"])
         self.assertEqual(self.text.count("secrets."), self.run_step.count("secrets."))
+        # B5.8 added POSTERS_HD_REFRESH_EXISTING to this exact set.
         self.assertEqual(sorted(step_env(self.run_step)),
-                         ["POSTERS_HD_BATCH", "POSTERS_HD_TIME_BUDGET_MIN", "PYTHONUNBUFFERED",
-                          "SUPABASE_KEY", "SUPABASE_URL"])
+                         ["POSTERS_HD_BATCH", "POSTERS_HD_REFRESH_EXISTING", "POSTERS_HD_TIME_BUDGET_MIN",
+                          "PYTHONUNBUFFERED", "SUPABASE_KEY", "SUPABASE_URL"])
         for key in ("SUPABASE_URL", "SUPABASE_KEY"):
             with self.subTest(key=key):
                 self.assertIn(f"{key}: ${{{{ secrets.{key} }}}}", self.run_step)   # positive control

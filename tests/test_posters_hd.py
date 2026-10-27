@@ -161,8 +161,8 @@ class _Db:
         assert name in self.tables, name
         return _Query(self, name)
 
-    def upload_image(self, bucket, path, image_bytes, content_type="image/jpeg"):
-        return SupabaseClient.upload_image(self, bucket, path, image_bytes, content_type)
+    def upload_image(self, bucket, path, image_bytes, content_type="image/jpeg", **kwargs):
+        return SupabaseClient.upload_image(self, bucket, path, image_bytes, content_type, **kwargs)
 
     def get_public_url(self, bucket, path):
         return SupabaseClient.get_public_url(self, bucket, path)
@@ -233,11 +233,11 @@ def _in_a_list(*media_rows, cdn_routes=None, **db_kwargs):
     return db, _Cdn(routes)
 
 
-def _run(db, cdn, batch=300, budget_min=20, clock=None):
+def _run(db, cdn, batch=300, budget_min=20, clock=None, **kwargs):
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
         try:
-            stats = mod.run(db, fetch=cdn, clock=clock or _Clock(), batch=batch, budget_min=budget_min)
+            stats = mod.run(db, fetch=cdn, clock=clock or _Clock(), batch=batch, budget_min=budget_min, **kwargs)
         except BaseException as exc:  # SystemExit included: the fail-fast is an exit
             stats = exc
     return stats, out.getvalue()
@@ -503,7 +503,8 @@ class KeyTest(unittest.TestCase):
         upload = db.uploads[0]
         self.assertEqual(upload["bucket"], "media-images")
         self.assertEqual(upload["path"], "posters-hd/550/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg")
-        self.assertEqual(upload["options"], {"content-type": "image/jpeg", "upsert": "true"})
+        # B5.8: and the one-year cache (it was this dict without "cache-control" until then).
+        self.assertEqual(upload["options"], {"content-type": "image/jpeg", "upsert": "true", "cache-control": "31536000"})
         # The URL is stored exactly as upload_image returned it, `?` included.
         self.assertEqual(db.media("m-00001")["poster_hd_url"],
                          f"{PUBLIC}media-images/posters-hd/550/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg?")
@@ -724,9 +725,104 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(_tokens(out).get("avg_kb"), f"{uploaded / 2 / 1024:.1f}")
 
 
+# ── B5.8: the long cache, and refresh_existing ────────────────────────────
+
+class LongCacheTest(unittest.TestCase):
+
+    def test_every_hd_upload_carries_the_one_year_cache(self):
+        db, cdn = _in_a_list(_media(1), _media(2, poster_path="/png.png"),
+                             cdn_routes={CDN + "png.png": (200, _image((600, 900), fmt="PNG"))})
+        _run(db, cdn)
+        self.assertEqual(len(db.uploads), 2)
+        for upload in db.uploads:
+            with self.subTest(path=upload["path"]):
+                self.assertEqual(upload["options"].get("cache-control"), "31536000")
+                self.assertEqual(upload["options"].get("content-type"), "image/jpeg")
+
+    def test_a_jpeg_uploaded_untouched_carries_it_too(self):
+        db, cdn = _in_a_list(_media(1), cdn_routes={CDN + "p1.jpg": (200, FITS)})
+        _, out = _run(db, cdn)
+        self.assertEqual(_tokens(out).get("fit_as_is"), "1")
+        self.assertEqual(db.uploads[0]["bytes"], FITS)
+        self.assertEqual(db.uploads[0]["options"].get("cache-control"), "31536000")
+
+    def test_enrichments_uploads_keep_todays_options(self):
+        # Positive control: the long cache is Posters HD's, not upload_image's default.
+        from bot import migrate_images
+        db = _Db(media=[_media(1)])
+        with mock.patch.object(migrate_images, "download_image", lambda url: FITS), \
+                contextlib.redirect_stdout(io.StringIO()):
+            url = migrate_images.migrate_poster(db, 1001, "T", "https://image.tmdb.org/t/p/w500/p1.jpg")
+        self.assertIsNotNone(url)
+        self.assertEqual([u["options"] for u in db.uploads], [{"content-type": "image/jpeg", "upsert": "true"}])
+
+
+class RefreshExistingTest(unittest.TestCase):
+
+    def _made(self, n=3):
+        """n titles whose HD posters are already made (same stem as poster_path)."""
+        rows = [_media(i, poster_hd_url=f"{PUBLIC}media-images/posters-hd/{1000 + i}/p{i}.jpg?") for i in range(1, n + 1)]
+        return _in_a_list(*rows)
+
+    def test_without_it_a_made_title_is_not_pending(self):
+        db, cdn = self._made()
+        _, out = _run(db, cdn)
+        self.assertEqual((_tokens(out).get("pending"), db.uploads, cdn.urls), ("0", [], []))
+
+    def test_with_it_every_made_title_is_pending_once_and_its_url_is_not_rewritten(self):
+        db, cdn = self._made()
+        before = {r["id"]: dict(r) for r in db.tables["media"]}
+        _, out = _run(db, cdn, refresh_existing=True)
+        tokens = _tokens(out)
+        self.assertEqual((tokens.get("pending"), tokens.get("made"), tokens.get("errors")), ("3", "3", "0"))
+        self.assertEqual(sorted(u["path"] for u in db.uploads),
+                         ["posters-hd/1001/p1.jpg", "posters-hd/1002/p2.jpg", "posters-hd/1003/p3.jpg"])
+        self.assertTrue(all(u["options"].get("cache-control") == "31536000" for u in db.uploads))
+        # The URL upload_image returns is the stored one: nothing is written, nothing else changes.
+        self.assertEqual(db.writes, [])
+        self.assertEqual(tokens.get("written"), "0")
+        self.assertEqual({r["id"]: r for r in db.tables["media"]}, before)
+
+    def test_a_url_that_changes_is_written_and_only_that_column(self):
+        # Positive control for the skip: a stored URL that is not what upload_image returns is rewritten.
+        row = _media(1, poster_hd_url=f"{PUBLIC}media-images/posters-hd/1001/p1.jpg?old-host")
+        db, cdn = _in_a_list(row)
+        _, out = _run(db, cdn, refresh_existing=True)
+        self.assertEqual([list(fields) for fields, _ in db.writes], [["poster_hd_url"]])
+        self.assertEqual(db.media("m-00001")["poster_hd_url"], f"{PUBLIC}media-images/posters-hd/1001/p1.jpg?")
+        self.assertEqual(db.media("m-00001")["poster_url"], row["poster_url"])
+        self.assertEqual(db.media("m-00001")["poster_path"], row["poster_path"])
+
+    def test_a_never_made_title_in_a_refresh_is_made_once_and_written(self):
+        made = _media(1, poster_hd_url=f"{PUBLIC}media-images/posters-hd/1001/p1.jpg?")
+        new = _media(2)                                   # poster_hd_url NULL: pending anyway
+        db, cdn = _in_a_list(made, new)
+        _, out = _run(db, cdn, refresh_existing=True)
+        self.assertEqual((_tokens(out).get("pending"), _tokens(out).get("made")), ("2", "2"))
+        self.assertEqual(sorted(u["path"] for u in db.uploads), ["posters-hd/1001/p1.jpg", "posters-hd/1002/p2.jpg"])
+        self.assertEqual(db.writes, [({"poster_hd_url": f"{PUBLIC}media-images/posters-hd/1002/p2.jpg?"},
+                                      ("id", "m-00002"))])
+
+    def test_it_still_skips_the_gone_and_the_pathless(self):
+        db, cdn = _in_a_list(_media(1, poster_hd_url="x", tmdb_missing_at="2026-10-20T08:00:00+00:00"),
+                             _media(2, poster_path="", poster_hd_url="y"), _media(3, poster_hd_url=f"{PUBLIC}p3.jpg"))
+        _, out = _run(db, cdn, refresh_existing=True)
+        tokens = _tokens(out)
+        self.assertEqual((tokens.get("gone"), tokens.get("no_path"), tokens.get("pending")), ("1", "1", "1"))
+
+
 # ── main: the environment ─────────────────────────────────────────────────
 
 class MainTest(unittest.TestCase):
+
+    def test_main_reads_refresh_existing_false_unless_true(self):
+        for value, expected in ((None, False), ("false", False), ("", False), ("no", False),
+                                ("true", True), ("TRUE", True)):
+            with self.subTest(value=value):
+                env = dict(FAKE_ENV) if value is None else {**FAKE_ENV, "POSTERS_HD_REFRESH_EXISTING": value}
+                seen, exited, _ = self._main(env)
+                self.assertIsNone(exited)
+                self.assertIs(seen.get("refresh_existing"), expected)
 
     def _main(self, env):
         seen = {}

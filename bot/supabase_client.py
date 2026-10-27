@@ -669,13 +669,22 @@ class SupabaseClient:
             print(f"[Supabase] Error upserting trailers for media_id={media_id}: {exc}")
             raise
 
-    def upload_image(self, bucket: str, path: str, image_bytes: bytes, content_type: str = "image/jpeg") -> str | None:
-        """Upload image_bytes to Supabase Storage and return the public URL, or None on failure."""
+    def upload_image(self, bucket: str, path: str, image_bytes: bytes, content_type: str = "image/jpeg",
+                     cache_seconds: int | None = None) -> str | None:
+        """Upload image_bytes to Supabase Storage and return the public URL, or None on failure.
+
+        *cache_seconds* (B5.8) asks for that cache on the object: storage3
+        sends it as the multipart cacheControl field — the one the server
+        stores — and as `cache-control: max-age=…`. Without it the request is
+        what it always was, and the server stores no-cache."""
+        file_options = {"content-type": content_type, "upsert": "true"}
+        if cache_seconds is not None:
+            file_options["cache-control"] = str(cache_seconds)  # storage3 prefixes max-age= itself
         try:
             self.client.storage.from_(bucket).upload(
                 path=path,
                 file=image_bytes,
-                file_options={"content-type": content_type, "upsert": "true"},
+                file_options=file_options,
             )
             return self.get_public_url(bucket, path)
         except Exception as exc:

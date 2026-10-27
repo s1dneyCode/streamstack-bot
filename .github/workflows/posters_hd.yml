@@ -16,6 +16,10 @@
 # and stops itself at the time budget, inside the job's 30 minutes; what is
 # left waits for the next hour. TMDb's image CDN needs no key, so the job's
 # only secrets are the two Supabase ones, on the step that runs the script.
+# Uploads carry a one-year cache (B5.8; the keys are versioned by TMDb file). A
+# dispatch with refresh_existing 'true' uploads once more every made poster
+# whose title is still in the set, so the ones made before that cache get it;
+# their URLs do not change. One that fails is not retried hourly: dispatch again.
 name: Posters HD
 
 on:
@@ -31,6 +35,10 @@ on:
         description: 'Minutes after the start when the run stops itself, with its SUMMARY (inside the 30-minute job)'
         required: false
         default: '20'
+      refresh_existing:
+        description: "'true' uploads once more every made HD poster still in the set (the one-year cache reaches the older ones)"
+        required: false
+        default: 'false'
 
 concurrency:
   group: ${{ github.workflow }}
@@ -54,4 +62,5 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           POSTERS_HD_BATCH: ${{ github.event.inputs.batch || '300' }}
           POSTERS_HD_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '20' }}
+          POSTERS_HD_REFRESH_EXISTING: ${{ github.event.inputs.refresh_existing || 'false' }}
         run: python -m bot.posters_hd
