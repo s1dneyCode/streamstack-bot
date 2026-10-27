@@ -110,6 +110,7 @@ class ImageFetch(NamedTuple):
     outcome: str
     content: bytes | None = None
     reason: str | None = None
+    content_type: str | None = None   # the CDN's Content-Type (B5.8: bot/tmdb_mirror.py uploads with it)
 
 
 def load_env() -> dict[str, str]:
@@ -203,7 +204,8 @@ def fetch_image(url: str, fetch=requests.get) -> ImageFetch:
         return ImageFetch(FETCH_ERROR, reason=f"HTTP {response.status_code}")
     if not response.content:
         return ImageFetch(FETCH_ERROR, reason="empty body")
-    return ImageFetch(FETCH_OK, response.content)
+    headers = getattr(response, "headers", None) or {}
+    return ImageFetch(FETCH_OK, response.content, content_type=headers.get("Content-Type"))
 
 
 def _jpeg(img: Image.Image) -> bytes:
