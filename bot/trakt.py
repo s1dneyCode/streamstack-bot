@@ -63,8 +63,8 @@ _LOWERED_FLOOR = 100
 # A budget wait shorter than this is the window's echo, not a full window:
 # once the first window has filled, a request is often ready a fraction of a
 # second before the one sent window_seconds earlier leaves. It is slept, but
-# neither printed nor counted (≈ 500–1,300 of them in a 3,000-title drain,
-# against ≈ 11 window-long waits).
+# neither printed nor counted. The window-long waits are: run #29 counted 51 in
+# a 3,000-title drain (B5.2 had estimated ≈ 11).
 _BUDGET_WAIT_REPORT_SECONDS = 1.0
 
 _MEDIA_TYPE_PATH = {"movie": "movies", "tv": "shows"}

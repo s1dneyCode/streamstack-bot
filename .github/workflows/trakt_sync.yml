@@ -8,9 +8,12 @@
 # 5,000 a run since B5.4: run #29 drained 3,000 in 58 minutes with no 429, the
 # budget below its only brake (51 waits). 123,962 were pending on 26/10: ≈ 25
 # days at 5,000. The 80 minutes hold ≈ 6,700 requests at 420 per 300 s, so
-# 5,000 titles fit at up to ≈ 1.3 requests a title; #29 spent ≈ 1.57. Until
-# the IMDb-id backfill brings the head there, the time budget ends a run short
-# of 5,000, with its SUMMARY and exit 0 — a plan, not a failure.
+# 5,000 titles fit at up to ≈ 1.3 requests a title; #29 spent ≈ 1.57. Run #30
+# (27/10) stamped the full 5,000 in 62 minutes with no budget cut — at most
+# ≈ 1.1 requests a title, since 62 minutes hold at most ≈ 5,400 at 420 per
+# 300 s: the IMDb-id backfill had brought the head under 1.3. Should the cost
+# climb back, the time budget ends a run short of 5,000, with its SUMMARY and
+# exit 0 — a plan, not a failure.
 # Each title costs one Trakt call by IMDB id when the title has one, resolve +
 # /related otherwise — ≈ 1.4 over the whole pending set, ≈ 1.6 at its head (run
 # #26: 1,087 by IMDB id, 1,913 by lookup) — and ONE database write

@@ -807,7 +807,8 @@ class SupabaseClient:
             print(f"[Supabase] Error setting tmdb_missing_at for media_id={media_id}: {exc}")
 
     # ------------------------------------------------------------------
-    # Trakt integration (shadow mode) — sync_trakt.py
+    # Trakt integration — sync_trakt.py (the app reads these columns; the
+    # «shadow mode» label was dropped in B5.1, and here in B5.5)
     # ------------------------------------------------------------------
 
     def get_catalog_tmdb_index(self, tmdb_ids: list[int]) -> dict[int, dict]:
