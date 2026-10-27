@@ -1,0 +1,57 @@
+# Posters HD (B5.7): an HD copy of the poster of every title that can reach
+# the app's slideshow — in a list, or chosen as a list's cover — so the app
+# reads media.poster_hd_url instead of calling TMDb (decided 27/10). TMDb's
+# original, fit inside 1280×1920 as a JPEG, hosted at
+# media-images/posters-hd/{tmdb_id}/{stem}.jpg; poster_url and poster_path
+# are never written, and no file is ever deleted.
+# Needs migration 20261027200000 (the column media.poster_hd_url) applied
+# first: without it the script stops at its read of the media rows, naming
+# the migration, and uploads and writes nothing (an empty set reads no media
+# row, so it ends with pending=0 instead).
+# Hourly so a title added to a list gets its HD poster at the next run, once
+# the backlog fits in one batch; at :41, off the top of the hour that GitHub
+# delays (the reason Trakt Sync runs at 02:17). An hour with nothing pending
+# reads the set and ends in seconds with pending=0 in its SUMMARY. Each run
+# attempts up to `batch` titles — a 404 or an error counts and stays pending —
+# and stops itself at the time budget, inside the job's 30 minutes; what is
+# left waits for the next hour. TMDb's image CDN needs no key, so the job's
+# only secrets are the two Supabase ones, on the step that runs the script.
+name: Posters HD
+
+on:
+  schedule:
+    - cron: '41 * * * *'  # hourly at :41 UTC
+  workflow_dispatch:
+    inputs:
+      batch:
+        description: 'Max titles to attempt this run (a 404 or an error counts, and stays pending)'
+        required: false
+        default: '300'
+      time_budget_min:
+        description: 'Minutes after the start when the run stops itself, with its SUMMARY (inside the 30-minute job)'
+        required: false
+        default: '20'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  posters-hd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Make HD posters
+        env:
+          PYTHONUNBUFFERED: '1'
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          POSTERS_HD_BATCH: ${{ github.event.inputs.batch || '300' }}
+          POSTERS_HD_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '20' }}
+        run: python -m bot.posters_hd
