@@ -204,9 +204,10 @@ class Phase1WritesByIdTest(unittest.TestCase):
         self.assertEqual(tmdb.asked, [("lookup_imdb_id", 1416, "movie")])  # the show and the one with an id: not asked
 
     def test_a_failed_write_leaves_the_row_unstamped_and_the_script_goes_on(self):
-        # B5.4 · close: NONE and MISSING movies are stamped on every run (the
-        # read does not filter imdb_checked_at), so a dropped connection on one
-        # PATCH — backfill #1 had two — must not end the script before phase 2.
+        # B5.4 · close: a dropped connection on one PATCH — backfill #1 had
+        # two — must not end the script before phase 2. (Then every NONE and
+        # MISSING movie was stamped on every run; since B5.5 the read keeps
+        # them out, see Phase1QueueRuleTest.)
         db = _Db([_row(1, 101), _row(2, 102)], fail_writes={"m-00001"})
         omdb = _Omdb(score=77)
         try:
@@ -230,6 +231,23 @@ class Phase1WritesByIdTest(unittest.TestCase):
         self.assertEqual(omdb.asked, [{"title": "Title 1", "year": "2020", "imdb_id": "tt0413573"}])
         self.assertEqual(db.rows[0]["rt_score"], 91)
         self.assertIn("[RT_BACKFILL] Done. 1 updated, 0 not found", out)
+
+
+class Phase1QueueRuleTest(unittest.TestCase):
+    """B5.5 · 0c(2): phase 1 read every movie with imdb_id IS NULL, so each
+    run re-asked TMDb for every movie already stamped NONE or MISSING. Now
+    the read keeps backfill_imdb_ids.py's queue rule: imdb_checked_at and
+    tmdb_missing_at null too."""
+
+    def test_a_stamped_or_missing_movie_is_not_read_and_an_unstamped_one_is(self):
+        db = _Db([_row(1, 101, imdb_checked_at="2026-10-26T12:00:00+00:00"),   # NONE or MISSING earlier
+                  _row(2, 102, tmdb_missing_at="2026-10-20T06:00:00+00:00"),   # gone from TMDb
+                  _row(3, 103)])                                               # positive control
+        tmdb = _Tmdb({})
+        _main(db, tmdb)
+
+        self.assertEqual(tmdb.asked, [("lookup_imdb_id", 103, "movie")])
+        self.assertEqual([w[1] for w in db.imdb_writes], [("id", "m-00003")])
 
 
 class Phase2WritesByIdTest(unittest.TestCase):

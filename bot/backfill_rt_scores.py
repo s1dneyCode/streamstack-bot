@@ -3,7 +3,9 @@ One-time backfill: populate rt_score for movies in public.media using OMDb.
 
 TV shows are skipped — OMDb does not provide RT scores for series.
 
-Phase 1: fill missing imdb_ids via TMDB external_ids endpoint. Since B5.4 it
+Phase 1: fill missing imdb_ids via TMDB external_ids endpoint, for movies
+never asked (since B5.5 imdb_checked_at and tmdb_missing_at null too, the
+queue rule of bot/backfill_imdb_ids.py). Since B5.4 it
 asks through TmdbClient.lookup_imdb_id and writes like bot/backfill_imdb_ids.py:
 by the row's id — never by tmdb_id, which a show can share with the movie —
 the id and imdb_checked_at for FOUND, imdb_checked_at alone for NONE and
@@ -79,9 +81,10 @@ def main(clock=None) -> None:
             fields = {"imdb_checked_at": now}
             if result.outcome == IMDB_FOUND:
                 fields = {"imdb_id": result.imdb_id, "imdb_checked_at": now}
-            # Caught like backfill_imdb_ids._write: the read does not filter
-            # imdb_checked_at, so every NONE and MISSING movie is stamped again
-            # on each run, and one dropped connection must not cost phase 2.
+            # Caught like backfill_imdb_ids._write: one dropped connection must
+            # not cost phase 2. (Until B5.5 the read did not filter
+            # imdb_checked_at, so every NONE and MISSING movie was stamped
+            # again on each run; now a stamped movie is not read.)
             try:
                 db.client.table("media").update(fields).eq("id", row["id"]).execute()
             except Exception as exc:

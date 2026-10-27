@@ -1263,7 +1263,14 @@ class SupabaseClient:
         return rows
 
     def get_movies_without_imdb_id(self) -> list[dict]:
-        """Return movies where imdb_id IS NULL, for backfilling."""
+        """Return movies where imdb_id IS NULL, for backfilling.
+
+        Since B5.5 also imdb_checked_at IS NULL and tmdb_missing_at IS NULL —
+        backfill_imdb_ids.py's queue rule — so backfill_rt_scores.py's phase 1
+        no longer re-asks TMDb, every run, for each movie already stamped NONE
+        or MISSING, nor for a title TMDb no longer has. Read whole before
+        phase 1 writes, so the offset pages do not shift under the stamps.
+        """
         rows: list[dict] = []
         page_size = 1000
         offset = 0
@@ -1275,6 +1282,8 @@ class SupabaseClient:
                     .select("id, tmdb_id, title")
                     .eq("media_type", "movie")
                     .is_("imdb_id", "null")
+                    .is_("imdb_checked_at", "null")
+                    .is_("tmdb_missing_at", "null")
                     .range(offset, offset + page_size - 1)
                     .execute()
                 )
