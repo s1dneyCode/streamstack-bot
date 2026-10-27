@@ -10,6 +10,7 @@ Reference: https://developer.themoviedb.org/reference/intro/getting-started
 
 import math
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -100,11 +101,15 @@ class TmdbClient:
         genuinely succeed on a later attempt: 429 (honoring the Retry-After
         header instead of the flat 2-second pause used elsewhere), 5xx
         server errors, and network/timeout errors. Non-429 4xx client
-        errors (404 Not Found, 401 Unauthorized, etc.) are raised
-        immediately on the first attempt — a missing season or a bad key
-        will never succeed just by asking again, so retrying it is pure
+        errors (404 Not Found, 403 Forbidden, etc.) are raised
+        immediately on the first attempt — a missing season will never
+        succeed just by asking again, so retrying it is pure
         wasted time. Raises the final exception if all attempts are
         exhausted (or immediately, for a non-retryable 4xx).
+
+        A 401 ends the run instead (B5.5): one line naming TMDB_API_KEY,
+        then exit 1. A refused key fails every request alike, so raising it
+        per title only let a run spend its whole budget on the same error.
 
         *quiet_statuses*: the 4xx statuses a caller expects and counts as an
         outcome, raised the same way but without the "not retrying" line
@@ -129,6 +134,11 @@ class TmdbClient:
                 return response.json()
             except requests.RequestException as exc:
                 status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
+                if status == 401:
+                    # The URL carries no query here: the api_key is in merged_params.
+                    print(f"[TMDB] ERROR: 401 Unauthorized for {url} — TMDb refused TMDB_API_KEY; "
+                          "stopping the run (exit 1).")
+                    sys.exit(1)
                 if status is not None and 400 <= status < 500:
                     # Non-retryable client error — fail fast, no point burning
                     # the remaining attempts on a request that can't succeed.

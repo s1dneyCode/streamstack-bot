@@ -178,8 +178,9 @@ class ResolveIdTest(unittest.TestCase):
 
     def test_only_a_404_is_unresolved_any_other_4xx_propagates(self):
         # A bad key or a refused request must never read as "no such title":
-        # Phase B would write zero rows and stamp the whole batch.
-        for status in (400, 401, 403):
+        # Phase B would write zero rows and stamp the whole batch. (A 401
+        # ends the run since B5.5 — test_fail_fast_401 — so it is not here.)
+        for status in (400, 403):
             with self.subTest(status=status):
                 router = _Router({"/search/tmdb/1416": (status, {"error": "no"})})
                 with _client(router) as client, self.assertRaises(requests.HTTPError):

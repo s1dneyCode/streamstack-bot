@@ -187,7 +187,8 @@ class TraktClient:
         times; a non-429 4xx is raised immediately on the first attempt —
         it can't succeed just by asking again. Raises the final exception
         if all attempts are exhausted (or immediately, for a non-retryable
-        4xx).
+        4xx). A 401 ends the run instead (B5.5): one line naming
+        TRAKT_CLIENT_ID, then exit 1.
 
         Returns the raw response (not .json()) so callers can also read
         response headers — needed by _get_list() for Trakt's
@@ -244,6 +245,12 @@ class TraktClient:
                     # here the trakt-api-key. Nothing below prints or raises it.
                     exc = requests.exceptions.InvalidHeader("a request header is malformed (value withheld)")
                 status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
+                if status == 401:
+                    # B5.5: a refused credential fails every request alike —
+                    # end the run rather than spend its budget title by title.
+                    print(f"[TRAKT] ERROR: 401 Unauthorized for {url} — Trakt refused TRAKT_CLIENT_ID; "
+                          "stopping the run (exit 1).")
+                    sys.exit(1)
                 if status is not None and 400 <= status < 500:
                     print(f"[TRAKT] {status} for {url} — not retrying (client error).")
                     raise _redacted(exc) from None  # its message quoted the URL's query

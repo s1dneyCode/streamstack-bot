@@ -34,6 +34,8 @@ Every entry-point script requires env vars and **fails fast with a clear message
 ```
 [BOT] ERROR: Required environment variable 'TMDB_API_KEY' is not set.
 ```
+A key that is set but refused fails fast too, since B5.5. On a 401, `TmdbClient._get` and `TraktClient._request` print `[TMDB] ERROR: 401 Unauthorized for <url> — TMDb refused TMDB_API_KEY; stopping the run (exit 1).` (`[TRAKT] … TRAKT_CLIENT_ID` for Trakt) and `sys.exit(1)`. The run doesn't go on title by title through every caller's `except Exception`. Any other 4xx still raises.
+
 Required vars by script vary — `TMDB_API_KEY` + `SUPABASE_URL` + `SUPABASE_KEY` are needed almost everywhere; `OMDB_API_KEY` is only needed by `bot/main.py` and `bot/backfill_rt_scores.py` (Rotten Tomatoes scores). There is no `.env.example` — check the script's own `load_env()` function (always near the top) for its exact requirements before running it. `WATCHMODE_API_KEY` is **not used anywhere** — streaming data moved entirely to TMDB's `/watch/providers` endpoint; if you see a reference to it, it's stale.
 
 ## Architecture

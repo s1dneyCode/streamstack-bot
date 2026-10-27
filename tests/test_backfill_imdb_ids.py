@@ -425,11 +425,12 @@ class MissingIsACountNotALineTest(unittest.TestCase):
         self.assertEqual((stats["errors"], stats["missing"], stats["written"]), (1, 0, 0))
 
     def test_another_client_error_in_the_backfill_still_prints_its_line(self):
-        # Control: a 401 (a bad key) is not an outcome — its line stays.
-        with _tmdb([(401, {})]) as client:
+        # Control: a 403 (a refused request) is not an outcome — its line
+        # stays. (A 401 until B5.5, which now ends the run: test_fail_fast_401.)
+        with _tmdb([(403, {})]) as client:
             stats, out = _run(_Table([_row(1)]), client)
 
-        self.assertIn("[TMDB] 401 for https://api.themoviedb.org/3/tv/1001/external_ids — not retrying (client error).",
+        self.assertIn("[TMDB] 403 for https://api.themoviedb.org/3/tv/1001/external_ids — not retrying (client error).",
                       out)
         self.assertEqual((stats["errors"], stats["missing"]), (1, 0))
 
@@ -451,7 +452,9 @@ class TmdbRedactionTest(unittest.TestCase):
 
     def test_no_api_key_reaches_a_tmdb_failure_line_or_the_raised_error(self):
         # TMDb's key rides in the query string; requests quotes the full URL.
-        for answers in ([(500, {})], [(401, {})], [requests.ConnectionError(
+        # The client error is a 403 since B5.5 (a 401 ends the run, and its
+        # line is checked for the key in test_fail_fast_401).
+        for answers in ([(500, {})], [(403, {})], [requests.ConnectionError(
                 "HTTPSConnectionPool(host='api.themoviedb.org'): Max retries exceeded with url: "
                 "/3/tv/1416/external_ids?api_key=fake-tmdb-key")]):
             with self.subTest(answers=repr(answers)[:40]):
