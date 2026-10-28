@@ -7,22 +7,39 @@
 # Needs migration tmdb_image_mirror (public.tmdb_image_mirror and the RPCs
 # tmdb_mirror_titles / tmdb_mirror_missing) applied first: without it the
 # script stops at its first call, naming the migration, and uploads nothing.
-# Hourly so a title that gains a backdrop, a logo or a cast is mirrored within
-# the hour once the first copy has drained; at :11, off the top of the hour
-# that GitHub delays and away from Posters HD's :41. Every run sweeps the
-# catalogue from its first page, and the ledger makes a page already copied
-# cost a few cheap calls (about five), so an hour with nothing new walks every
-# page and ends in minutes — the first runs measure how many — with copied=0
+# When (B5.9): the first copy is complete (28/10: 275,300 files in the ledger,
+# 8,012 MB), so it no longer runs hourly. Every run sweeps the catalogue from
+# its first page, and a sweep with nothing new still costs ≈ 3,300 calls and
+# ≈ 50 MB of database egress (≈ 7 minutes) — hourly, ≈ 37 GB a month to find
+# nothing. A new image only comes from a workflow that writes one, so it runs
+# through workflow_run after each of them completes (whatever its conclusion:
+# a failed run may still leave rows to mirror), each listed by its title — the
+# nightly bot (Step 9's logos), the enrichment (logos, cast and crew), and the
+# backfill workflows (backdrops, logos, credits); once a day at 12:23 UTC as a
+# fallback, off the top of the hour and after the nightly chain (Coverage
+# Sweep at 10:00), so a dropped event or a skipped cron costs at most a day;
+# and on dispatch. An upstream Nightly Bot run started by a push or a pull
+# request only runs its tests, so it starts no sweep. One run at a time, and
+# one waiting: a later trigger replaces the waiting one, so the last sweep
+# always follows the last writer. A sweep with nothing new ends with copied=0
 # in its SUMMARY. A run stops itself at the time budget or the file cap,
 # inside the job's 90 minutes, and the next one continues where the ledger
-# says; while the first copy drains, a dispatch may ask up to 80 minutes (and
-# a larger max_files). TMDb's image CDN needs no key, so the job's only
-# secrets are the two Supabase ones, on the step that runs the script.
+# says; a dispatch may ask up to 80 minutes (and a larger max_files). TMDb's
+# image CDN needs no key, so the job's only secrets are the two Supabase ones,
+# on the step that runs the script.
 name: TMDb Mirror
 
 on:
+  workflow_run:
+    workflows:
+      - Nightly Bot
+      - Nightly Enrichment
+      - Backfills
+      - "Full Backfill — New Data"
+      - "Full Backfill — After Bulk Import"
+    types: [completed]
   schedule:
-    - cron: '11 * * * *'  # hourly at :11 UTC
+    - cron: '23 12 * * *'  # daily 12:23 UTC: the fallback, after the nightly chain
   workflow_dispatch:
     inputs:
       time_budget_min:
@@ -44,6 +61,8 @@ concurrency:
 
 jobs:
   tmdb-mirror:
+    # After an upstream run only when it ran the bot: Nightly Bot on a push or a pull request runs its tests alone.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

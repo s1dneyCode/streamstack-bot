@@ -1,11 +1,14 @@
 """
-Unit tests for the «TMDb Mirror» workflow (RUN B5.8 · 0c): hourly at :11 —
-off the top of the hour that GitHub delays and away from Posters HD's :41 —
-plus dispatch with its inputs (time_budget_min, max_files, workers) mapped to
-the script's env with the script's own defaults; one run at a time; a
-90-minute job around a budget a dispatch may raise to 80; Python 3.11,
-unbuffered; the two Supabase secrets by reference, on the step that runs the
-script and nowhere else, and NOT TMDB_API_KEY (the image CDN needs no key).
+Unit tests for the «TMDb Mirror» workflow (RUN B5.8 · 0c; its schedule moved
+by B5.9 · 0a). Since B5.9 it runs after every workflow that writes an image
+field the mirror copies (workflow_run, types completed, by the writers'
+`name:`), once a day as a fallback off the top of the hour and after the
+nightly chain, and on dispatch with its inputs (time_budget_min, max_files,
+workers) mapped to the script's env with the script's own defaults; one run at
+a time; a 90-minute job around a budget a dispatch may raise to 80; Python
+3.11, unbuffered; the two Supabase secrets by reference, on the step that runs
+the script and nowhere else, and NOT TMDB_API_KEY (the image CDN needs no key).
+Until B5.9 it ran hourly at :11.
 
 The pins are exact, not substrings — the shape of
 tests/test_workflow_posters_hd.py, whose helpers this file reuses. The
@@ -22,7 +25,71 @@ from bot import posters_hd, tmdb_mirror
 from tests.test_workflow_posters_hd import active_crons, secrets_named, step_env, steps
 
 WORKFLOW = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "tmdb_mirror.yml"
+WORKFLOWS = WORKFLOW.parent
 RUN_LINE = "python -m bot.tmdb_mirror"
+# The bot scripts that write an image field the mirror copies — media.backdrop_path,
+# media.title_logo_url (a value, not the null a bare upsert_media writes) or
+# media_credits.profile_path — as RUN B5.9 measured them (file:line in its report).
+IMAGE_WRITERS = frozenset({"main", "enrich_new_titles", "backfill_backdrops", "backfill_title_logos",
+                           "backfill_credits", "backfill_cast_photos", "backfill_cast_characters"})
+# The house's daily crons the fallback must follow: every scheduled workflow but the two
+# image jobs (Posters HD hourly, and this one).
+NOT_THE_NIGHTLY_CHAIN = {"posters_hd.yml", "tmdb_mirror.yml"}
+
+
+def _top_name(text: str) -> str | None:
+    """A workflow file's top-level `name:`."""
+    match = re.search(r"(?m)^name: (.+?)\s*$", text)
+    return match.group(1) if match else None
+
+
+def _workflow_names() -> dict[str, list[str]]:
+    """Every workflow file in the repo by its top-level `name:`."""
+    names = {}
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        names.setdefault(_top_name(path.read_text(encoding="utf-8")), []).append(path.name)
+    return names
+
+
+def _on_block(text: str) -> str:
+    """The text of the `on:` block, up to the concurrency block."""
+    return text.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0] if "\non:\n" in text else ""
+
+
+def _triggers(text: str) -> list[str]:
+    return re.findall(r"(?m)^  ([a-z_]+):", _on_block(text))
+
+
+def _workflow_run(text: str) -> str:
+    """The workflow_run trigger's own lines."""
+    block = _on_block(text)
+    if "\n  workflow_run:\n" not in "\n" + block:
+        return ""
+    after = ("\n" + block).split("\n  workflow_run:\n", 1)[1]
+    return re.split(r"(?m)^  [a-z_]+:", after, maxsplit=1)[0]
+
+
+def _listed_workflows(text: str) -> list[str]:
+    """The names under workflow_run's `workflows:`, quotes stripped."""
+    run = _workflow_run(text)
+    listed = run.split("    workflows:\n", 1)[1] if "    workflows:\n" in run else ""
+    return [m.strip().strip("'\"") for m in re.findall(r"(?m)^      - (.+?)\s*$", listed)]
+
+
+def _daily(cron: str) -> tuple[int, int] | None:
+    """(hour, minute) of a once-a-day cron (`M H * * *`), or None."""
+    match = re.fullmatch(r"(\d{1,2}) (\d{1,2}) \* \* \*", cron.strip())
+    return (int(match.group(2)), int(match.group(1))) if match else None
+
+
+def _writer_workflows() -> set[str]:
+    """The `name:` of every workflow in the repo that runs an image writer."""
+    found = set()
+    for path in WORKFLOWS.glob("*.yml"):
+        text = path.read_text(encoding="utf-8")
+        if set(re.findall(r"python -m bot\.([a-z_]+)", text)) & IMAGE_WRITERS:
+            found.add(_top_name(text))
+    return found
 
 
 def _text() -> str:
@@ -51,12 +118,63 @@ class TmdbMirrorWorkflowTest(unittest.TestCase):
         self.text = _text()
         self.run_step = next((s for s in steps(self.text) if f"run: {RUN_LINE}" in s), "")
 
-    def test_it_runs_hourly_at_11_and_on_dispatch(self):
-        self.assertEqual(active_crons(self.text), ["11 * * * *"])
-        self.assertIn("\n  workflow_dispatch:\n", self.text)
-        # Away from Posters HD's :41 (positive control: that one is still at :41).
-        posters = (WORKFLOW.parent / "posters_hd.yml").read_text(encoding="utf-8")
-        self.assertEqual(active_crons(posters), ["41 * * * *"])
+    # ── when it runs (B5.9) ───────────────────────────────────────────────
+
+    def test_the_triggers_are_the_writers_one_daily_fallback_and_dispatch(self):
+        self.assertEqual(sorted(_triggers(self.text)), ["schedule", "workflow_dispatch", "workflow_run"])
+        self.assertEqual(len(active_crons(self.text)), 1)
+        self.assertIsNotNone(_daily(active_crons(self.text)[0]), active_crons(self.text))
+        # Positive control: B5.8's hourly cron is not a daily one.
+        self.assertIsNone(_daily("11 * * * *"))
+
+    def test_the_listed_writers_are_every_workflow_that_runs_an_image_writer(self):
+        expected = _writer_workflows()
+        self.assertEqual(sorted(_listed_workflows(self.text)), sorted(expected))
+        # Positive control: what (a) found, and every writer module is a bot script.
+        self.assertEqual(expected, {"Nightly Bot", "Nightly Enrichment", "Backfills", "Full Backfill — New Data",
+                                    "Full Backfill — After Bulk Import"})
+        for module in IMAGE_WRITERS:
+            with self.subTest(module=module):
+                self.assertTrue((WORKFLOWS.parent.parent / "bot" / f"{module}.py").exists())
+
+    def test_each_listed_name_is_the_name_of_one_workflow_in_the_repo(self):
+        names = _workflow_names()
+        listed = _listed_workflows(self.text)
+        self.assertTrue(listed)
+        for name in listed:
+            with self.subTest(name=name):
+                self.assertEqual(len(names.get(name, [])), 1, names.get(name))
+        # Positive control: a misspelt name names no workflow.
+        self.assertNotIn("Nightly Enrichement", names)
+
+    def test_workflow_run_fires_on_completed_whatever_the_conclusion(self):
+        run = _workflow_run(self.text)
+        self.assertRegex(run, r"(?m)^    types: \[completed\]$")
+        self.assertEqual(re.findall(r"(?m)^    types: (.+)$", run), ["[completed]"])
+        # Positive control: a branch filter or a conclusion filter would show up here.
+        self.assertEqual(re.findall(r"(?m)^    ([a-z_-]+):", run), ["workflows", "types"])
+
+    def test_the_fallback_runs_once_a_day_off_the_hour_after_the_nightly_chain(self):
+        fallback = _daily(active_crons(self.text)[0]) if active_crons(self.text) else None
+        self.assertIsNotNone(fallback, active_crons(self.text))
+        hour, minute = fallback
+        self.assertNotEqual(minute, 0)
+        chain = []
+        for path in WORKFLOWS.glob("*.yml"):
+            if path.name not in NOT_THE_NIGHTLY_CHAIN:
+                chain.extend(d for d in map(_daily, active_crons(path.read_text(encoding="utf-8"))) if d)
+        self.assertIn((10, 0), chain)                          # Coverage Sweep, the chain's last
+        self.assertGreater((hour, minute), max(chain))
+        # Positive controls: the top of the hour and a time inside the chain fail.
+        self.assertEqual(_daily("0 12 * * *")[1], 0)
+        self.assertLess(_daily("23 9 * * *"), max(chain))
+
+    def test_an_upstream_run_by_a_push_or_a_pull_request_does_not_sweep(self):
+        # Nightly Bot also runs on push and pull_request, and then only its tests job runs.
+        job_if = re.findall(r"(?m)^    if: (.+)$", self.text)
+        self.assertEqual(job_if, ["github.event_name != 'workflow_run' || github.event.workflow_run.event == 'schedule' "
+                                  "|| github.event.workflow_run.event == 'workflow_dispatch'"])
+        self.assertNotIn("push", job_if[0])                    # positive control: only the two events that write
 
     def test_the_three_inputs_reach_the_scripts_env_with_its_defaults(self):
         dispatch = self.text.split("\n  workflow_dispatch:\n    inputs:\n", 1)[-1].split("\nconcurrency:", 1)[0]
@@ -103,7 +221,9 @@ class TmdbMirrorWorkflowTest(unittest.TestCase):
     def test_the_file_says_what_it_is_for(self):
         head = self.text.split("name:", 1)[0]
         self.assertTrue(head.startswith("#"), head[:40])
-        for words in ("tmdb_image_mirror", "w1280", "w500", "w185", ":11", "copied=0", "one-year cache"):
+        # B5.9 rewrote this list: ":11" left with the hourly cron; the new schedule's why came in.
+        for words in ("tmdb_image_mirror", "w1280", "w500", "w185", "copied=0", "one-year cache",
+                      "first copy is complete", "3,300", "50 MB", "workflow_run", "once a day"):
             with self.subTest(words=words):
                 self.assertIn(words, head)
         self.assertIn("\nname: TMDb Mirror\n", self.text)
