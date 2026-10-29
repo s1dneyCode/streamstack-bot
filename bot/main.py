@@ -64,14 +64,16 @@ def extract_year(release_date: str | None) -> str | None:
 def step9_logo_fields(tmdb, tmdb_id, media_type, images_data, measure=luminance_for_logo) -> dict:
     """Step 9's logo and its luminance over black, for one new title.
 
-    The logo is chosen exactly as Step 9 always chose it (get_title_logo on
-    the prefetched images payload). Whoever writes title_logo_url writes the
+    The logo is the chooser's (B4: choose_title_logo on the prefetched images
+    payload, the lightest at or above the app's line), and its luminance comes
+    back with it, measured once. Whoever writes title_logo_url writes the
     luminance in the same payload: a title without a logo gets None for both
     and nothing is fetched; a logo that cannot be measured gets None for the
     luminance, which backfill_title_logo_luminance.py measures later.
     """
-    url = tmdb.get_title_logo(tmdb_id=tmdb_id, media_type=media_type, data=images_data)
-    return {"title_logo_url": url, "title_logo_luminance": measure(url) if url else None}
+    url, luminance = tmdb.choose_title_logo(tmdb_id=tmdb_id, media_type=media_type, data=images_data,
+                                            measure=measure)
+    return {"title_logo_url": url, "title_logo_luminance": luminance}
 
 
 def main() -> None:

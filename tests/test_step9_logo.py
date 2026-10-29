@@ -20,6 +20,7 @@ import unittest
 from bot import main as bot_main
 from bot.logo_luminance import luminance_for_logo
 from bot.supabase_client import SupabaseClient
+from bot.tmdb import TmdbClient
 
 TOL = 1e-9  # the luminance is passed through, not computed: any drift is a bug
 
@@ -30,11 +31,40 @@ IMAGES = {"logos": [{"iso_639_1": "en", "file_path": "/logo.png"}]}  # opaque to
 class _FakeTmdb:
     def __init__(self, logo=LOGO_URL):
         self.logo = logo
-        self.calls = []  # kwargs of every get_title_logo call
+        self.calls = []  # kwargs of every chooser call, its measure left out
 
     def get_title_logo(self, **kwargs):
         self.calls.append(kwargs)
         return self.logo
+
+    def choose_title_logo(self, **kwargs):
+        # B4: Step 9 calls the chooser. This fake follows the new call: its canned logo,
+        # measured once by the measure Step 9 hands it — what get_title_logo and Step 9's
+        # own measure did before.
+        measure = kwargs.pop("measure")
+        url = self.get_title_logo(**kwargs)
+        return url, (measure(url) if url else None)
+
+
+DARK = "https://image.tmdb.invalid/t/p/w500/dark.png"
+LIGHT = "https://image.tmdb.invalid/t/p/w500/light.png"
+
+
+class _ChooserTmdb:
+    """B4: canned candidates, the REAL choose_title_logo."""
+
+    choose_title_logo = TmdbClient.choose_title_logo
+
+    def __init__(self, candidates):
+        self.candidates, self.calls = list(candidates), []
+
+    def title_logo_candidates(self, tmdb_id, media_type, data=None):
+        self.calls.append({"tmdb_id": tmdb_id, "media_type": media_type, "data": data})
+        return list(self.candidates)
+
+    def get_title_logo(self, **kwargs):
+        # The rule until B4 — the first candidate — for a Step 9 that still calls it.
+        return self.candidates[0] if self.candidates else None
 
 
 class _FakeMeasure:
@@ -106,6 +136,31 @@ class StepNineLogoFieldsTest(unittest.TestCase):
         bot_main.step9_logo_fields(tmdb, 700, "movie", {}, measure=_FakeMeasure(0.5))
 
         self.assertEqual(tmdb.calls, [{"tmdb_id": 700, "media_type": "movie", "data": {}}])
+
+    def test_b4_step_9_writes_the_choosers_winner_and_its_luminance(self):
+        values = {DARK: 0.011, LIGHT: 0.6}
+        calls = []
+
+        def by_url(url):
+            calls.append(url)
+            return values[url]
+
+        tmdb = _ChooserTmdb([DARK, LIGHT])
+        fields = bot_main.step9_logo_fields(tmdb, 700, "movie", IMAGES, measure=by_url)
+        self.assertEqual(fields, {"title_logo_url": LIGHT, "title_logo_luminance": 0.6})
+        self.assertEqual(calls, [DARK, LIGHT])                       # each measured once, none again
+        self.assertEqual(tmdb.calls, [{"tmdb_id": 700, "media_type": "movie", "data": IMAGES}])
+
+    def test_b4_step_9_a_light_first_candidate_is_one_fetch(self):
+        calls = []
+
+        def by_url(url):
+            calls.append(url)
+            return {DARK: 0.011, LIGHT: 0.6}[url]
+
+        fields = bot_main.step9_logo_fields(_ChooserTmdb([LIGHT, DARK]), 700, "movie", IMAGES, measure=by_url)
+        self.assertEqual(fields, {"title_logo_url": LIGHT, "title_logo_luminance": 0.6})
+        self.assertEqual(calls, [LIGHT])
 
     def test_step9_record_spreads_the_helper_in_place_of_the_logo_key(self):
         # STRUCTURAL PIN, declared as such: main() is too wide to drive with

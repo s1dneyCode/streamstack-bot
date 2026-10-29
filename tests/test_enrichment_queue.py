@@ -116,8 +116,8 @@ class _FakeTmdb:
         self.paths.append(path)
         return {}
 
-    def get_title_logo(self, **kwargs):
-        return None
+    def choose_title_logo(self, **kwargs):   # B4: the writers' call (get_title_logo until then)
+        return None, None
 
 
 def _row(**overrides) -> dict:

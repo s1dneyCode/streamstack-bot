@@ -20,6 +20,7 @@ import unittest
 from unittest import mock
 
 from bot import backfill_title_logos, enrich_new_titles
+from bot.tmdb import TmdbClient
 
 TOL = 1e-9  # the luminance is passed through, not computed: any drift is a bug
 
@@ -120,8 +121,51 @@ class _FakeTmdb:
             raise self.error
         return self.logo(tmdb_id) if callable(self.logo) else self.logo
 
+    def choose_title_logo(self, tmdb_id, media_type, data=None, measure=None):
+        # B4: the writers call the chooser. This fake follows the new call: its canned
+        # logo, measured once by the writer's measure — what get_title_logo and the
+        # writer's own luminance_for_logo did before.
+        url = self.get_title_logo(tmdb_id, media_type, data)
+        return url, (measure(url) if url else None)
+
     def _get(self, path, params=None):  # enrich Step 0's base detail
         return {}
+
+
+DARK = "https://image.tmdb.invalid/t/p/w500/dark.png"
+LIGHT = "https://image.tmdb.invalid/t/p/w500/light.png"
+
+
+class _ChooserTmdb:
+    """B4: a TMDb client whose candidates are canned and whose choose_title_logo
+    is the REAL one, so a writer's payload is the real chooser's winner."""
+
+    choose_title_logo = TmdbClient.choose_title_logo
+
+    def __init__(self, candidates):
+        self.candidates, self.calls = list(candidates), []
+
+    def title_logo_candidates(self, tmdb_id, media_type, data=None):
+        self.calls.append((tmdb_id, media_type, data))
+        return list(self.candidates)
+
+    def get_title_logo(self, tmdb_id, media_type, data=None):
+        # The rule until B4 — the first candidate — for a writer that still calls it.
+        return self.candidates[0] if self.candidates else None
+
+    def _get(self, path, params=None):
+        return {}
+
+
+class _MapLuminance:
+    """luminance_for_logo stand-in: a value per URL, every call recorded."""
+
+    def __init__(self, values):
+        self.values, self.calls = dict(values), []
+
+    def __call__(self, url):
+        self.calls.append(url)
+        return self.values.get(url)
 
 
 class _FakeLuminance:
@@ -283,6 +327,20 @@ class EnrichStep5Test(_PayloadTestCase):
         _, _, had_error, _ = self._step5(_enrich_row(), _FakeTmdb(), _FakeLuminance(0.83))
         self.assertFalse(had_error)
 
+    def test_b4_step_5_writes_the_choosers_winner_and_its_luminance(self):
+        luminance = _MapLuminance({DARK: 0.011, LIGHT: 0.6})
+        db, stats, had_error, _ = self._step5(_enrich_row(), _ChooserTmdb([DARK, LIGHT]), luminance)
+        self.assertEqual(len(db.updates), 1)
+        self.assertLogoPayload(db.updates[0][1], LIGHT, 0.6)          # one payload, both keys
+        self.assertEqual(luminance.calls, [DARK, LIGHT])                # each measured once
+        self.assertEqual((had_error, stats["logos"]), (False, 1))
+
+    def test_b4_step_5_a_light_first_candidate_is_one_fetch(self):
+        luminance = _MapLuminance({DARK: 0.011, LIGHT: 0.6})
+        db, _, _, _ = self._step5(_enrich_row(), _ChooserTmdb([LIGHT, DARK]), luminance)
+        self.assertLogoPayload(db.updates[0][1], LIGHT, 0.6)
+        self.assertEqual(luminance.calls, [LIGHT])
+
     def test_main_runs_step_5_through_the_handler_with_its_error_semantics(self):
         ok_row = _enrich_row(id=1, tmdb_id=101, title="Dune")
         bad_row = _enrich_row(id=2, tmdb_id=102, title="Arrival")
@@ -380,6 +438,21 @@ class BackfillTitleLogosTest(_PayloadTestCase):
         # Control: when TMDb has a logo, the same fake is measured once.
         self._row_handler(self._row(), _FakeTmdb(), luminance)
         self.assertEqual(luminance.calls, [LOGO_URL])
+
+    def test_b4_the_backfill_writes_the_choosers_winner_and_its_luminance(self):
+        luminance = _MapLuminance({DARK: 0.011, LIGHT: 0.6})
+        db, written, out = self._row_handler(self._row(), _ChooserTmdb([DARK, LIGHT]), luminance)
+        self.assertTrue(written)
+        self.assertEqual(len(db.updates), 1)
+        self.assertLogoPayload(db.updates[0][1], LIGHT, 0.6)
+        self.assertEqual(luminance.calls, [DARK, LIGHT])
+        self.assertEqual(out, f"[LOGOS] 1/3 Dune: {LIGHT} · luminance 0.60\n")
+
+    def test_b4_the_backfill_a_light_first_candidate_is_one_fetch(self):
+        luminance = _MapLuminance({DARK: 0.011, LIGHT: 0.6})
+        db, _, _ = self._row_handler(self._row(), _ChooserTmdb([LIGHT, DARK]), luminance)
+        self.assertLogoPayload(db.updates[0][1], LIGHT, 0.6)
+        self.assertEqual(luminance.calls, [LIGHT])
 
     def test_main_selects_only_rows_without_a_logo_and_counts_as_before(self):
         rows = [self._row(id=1, tmdb_id=101, title="A"),

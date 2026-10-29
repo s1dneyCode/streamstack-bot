@@ -29,16 +29,18 @@ def load_env() -> dict[str, str]:
 
 
 def backfill_title_logo(db, tmdb, row: dict, i: int, total: int) -> bool:
-    """One row: fetch the title logo and write it with its luminance.
+    """One row: choose the title logo and write it with its luminance.
 
+    The logo is the chooser's (B4: choose_title_logo, the lightest at or above
+    the app's line), its luminance measured once and handed back with it.
     The URL and its luminance go in ONE update; the luminance is None (SQL
     NULL) when it could not be measured, so backfill_title_logo_luminance.py
     measures it later. Returns True when a logo was written.
     """
-    logo_url = tmdb.get_title_logo(tmdb_id=row["tmdb_id"], media_type=row["media_type"])
+    logo_url, luminance = tmdb.choose_title_logo(tmdb_id=row["tmdb_id"], media_type=row["media_type"],
+                                                 measure=luminance_for_logo)
 
     if logo_url:
-        luminance = luminance_for_logo(logo_url)
         db.client.table("media").update(
             {"title_logo_url": logo_url, "title_logo_luminance": luminance}
         ).eq("id", row["id"]).execute()

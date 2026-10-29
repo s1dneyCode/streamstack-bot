@@ -1,13 +1,15 @@
 """
-The one definition of a title logo's luminance over black.
+The one definition of a title logo's luminance over black — and, since B4,
+of which logo a title gets.
 
-The app draws title logos on a black ground, and the board's rule (E188 ·
-T1-06 § 6a, case D) falls back to the text title when a logo's relative
-luminance over that ground is below 0.25. The app cannot decode an image
-in its test suite, so the measure is data: the bot computes it here and
-writes it to media.title_logo_luminance beside title_logo_url, and the app
-reads a number. Every writer of that column calls luminance_for_logo();
-there is no second formula anywhere.
+The app draws title logos on a black ground, and its detail screen falls back
+to the text title when a logo's relative luminance over that ground is below
+MIN_LOGO_LUMINANCE. The app cannot decode an image in its test suite, so the
+measure is data: the bot computes it here and writes it to
+media.title_logo_luminance beside title_logo_url, and the app reads a number.
+Every writer of that column calls luminance_for_logo(); there is no second
+formula anywhere. Every writer of title_logo_url chooses through
+choose_logo(); there is no second rule anywhere.
 """
 
 import io
@@ -15,6 +17,17 @@ import re
 
 import requests
 from PIL import Image
+
+# The line the app draws a title logo at: its detail screen shows the logo
+# when the luminance over black is at least this, the text title otherwise —
+# kTitleLogoMinLuminance in the app's
+# lib/features/detail/presentation/screens/detail_screen.dart (the row 7
+# rule). The two move together: change one, change the other, and dispatch
+# the dark-logos backfill again.
+MIN_LOGO_LUMINANCE = 0.10
+# After a known-dark first candidate, this many unmeasurable logos in a row
+# end the walk: the CDN is failing, and each one more is a fetch for nothing.
+UNMEASURED_IN_A_ROW_MAX = 3
 
 
 def luminance_of_image(data: bytes) -> float | None:
@@ -101,3 +114,48 @@ def luminance_for_logo(url: str, fetch=requests.get) -> float | None:
     if value is None:
         print(f"[LUMINANCE] {url}: nothing to read (undecodable, or no visible pixel)")
     return value
+
+
+def choose_logo(candidates: list[str], measure=luminance_for_logo,
+                known: dict[str, float] | None = None) -> tuple[str | None, float | None]:
+    """The title logo to write, and its luminance, out of *candidates* in
+    TMDb's order (B4) — the lightest TMDb offers, at or above the app's line.
+
+    The first candidate is measured. At or above MIN_LOGO_LUMINANCE, or
+    unmeasurable (None), it wins exactly as before B4: one fetch, the same
+    answer. Known dark: the rest are walked in order and the first one
+    measured at or above the line wins. An unmeasurable one is passed over —
+    a known-dark logo shows the text title, an unknown one could be an
+    invisible logo — and UNMEASURED_IN_A_ROW_MAX of them in a row end the
+    walk. If nothing wins, the lightest measured one does, TMDb's order
+    breaking a tie, so the first stays when nothing is lighter.
+
+    The winner comes back with its luminance, so the writer writes both keys
+    in one payload and no URL is fetched twice. *known* maps a URL to a
+    luminance already measured (the stored one), which stands in for its
+    fetch. No candidates: (None, None), and nothing is fetched."""
+    if not candidates:
+        return None, None
+    known = known or {}
+
+    def luminance(url):
+        return known[url] if url in known else measure(url)
+
+    first = candidates[0]
+    best, best_value = first, luminance(first)
+    if best_value is None or best_value >= MIN_LOGO_LUMINANCE:
+        return best, best_value
+    unmeasured = 0
+    for url in candidates[1:]:
+        value = luminance(url)
+        if value is None:
+            unmeasured += 1
+            if unmeasured >= UNMEASURED_IN_A_ROW_MAX:
+                break
+            continue
+        unmeasured = 0
+        if value >= MIN_LOGO_LUMINANCE:
+            return url, value
+        if value > best_value:
+            best, best_value = url, value
+    return best, best_value

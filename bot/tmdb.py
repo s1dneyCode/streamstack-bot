@@ -19,6 +19,7 @@ from typing import NamedTuple
 import requests
 from bot.utils import format_date, clean_text, redact_exception, redact_query
 from bot.rate_limiter import RateLimiter
+from bot.logo_luminance import choose_logo, luminance_for_logo
 
 # Base URL for all TMDB v3 endpoints
 TMDB_BASE = "https://api.themoviedb.org/3"
@@ -1589,31 +1590,42 @@ class TmdbClient:
             for region in regions
         }
 
-    def get_title_logo(self, tmdb_id: int, media_type: str, data: dict | None = None) -> str | None:
+    def title_logo_candidates(self, tmdb_id: int, media_type: str, data: dict | None = None) -> list[str]:
         """
-        Return a full image URL for the title's logo, preferring English.
-        Falls back to the first logo in any language if no English logo exists.
-        Returns None if no logos are available.
+        The pool a title logo is chosen from, as full w500 URLs: the English
+        logos in TMDb's order; when there is none, every logo in TMDb's order.
+        A logo without a file_path is left out.
 
         Pass a pre-fetched /movie|tv/{id}/images payload via *data* to avoid
         a second request when the caller already has one (e.g. via
-        append_to_response=images on the detail call).
+        append_to_response=images on the detail call). Otherwise one images
+        call, through _get (its limiter, its retries, its 401 rule); its
+        errors propagate — choose_title_logo turns them into no logo.
         """
         if data is None:
-            try:
-                data = self._get(f"/{media_type}/{tmdb_id}/images")
-            except Exception as exc:
-                print(f"[TMDB] Could not fetch images for {media_type}/{tmdb_id}: {exc}")
-                return None
+            data = self._get(f"/{media_type}/{tmdb_id}/images", quiet_statuses=frozenset({404}))
+        logos = (data or {}).get("logos") or []
+        pool = [l for l in logos if l.get("iso_639_1") == "en"] or logos
+        return [f"{POSTER_BASE}{l['file_path']}" for l in pool if l.get("file_path")]
 
-        logos = data.get("logos", [])
-        if not logos:
-            return None
+    def choose_title_logo(self, tmdb_id: int, media_type: str, data: dict | None = None,
+                          measure=luminance_for_logo) -> tuple[str | None, float | None]:
+        """
+        The title logo every writer writes, with its luminance (B4): the
+        lightest logo TMDb offers at or above the app's line, by
+        logo_luminance.choose_logo over title_logo_candidates. Until B4 this
+        was get_title_logo, the first English logo.
 
-        en_logos = [l for l in logos if l.get("iso_639_1") == "en"]
-        chosen = en_logos[0] if en_logos else logos[0]
-        file_path = chosen.get("file_path", "")
-        return f"{POSTER_BASE}{file_path}" if file_path else None
+        A failed images fetch is no logo, (None, None) with one line, as it
+        was: the writers count a title without a logo, not an error. A 401
+        still ends the run (SystemExit is not an Exception).
+        """
+        try:
+            candidates = self.title_logo_candidates(tmdb_id, media_type, data=data)
+        except Exception as exc:
+            print(f"[TMDB] Could not fetch images for {media_type}/{tmdb_id}: {exc}")
+            return None, None
+        return choose_logo(candidates, measure)
 
     def get_videos(self, tmdb_id: int, media_type: str, data: dict | None = None) -> list[dict]:
         """
