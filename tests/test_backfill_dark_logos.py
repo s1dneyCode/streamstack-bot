@@ -72,7 +72,8 @@ class _Query:
             rows = [r for r in rows if r.get(col) is not None and r[col] < bound]
         if self.named("select")[0][2].get("count"):
             return types.SimpleNamespace(data=rows[:1], count=len(rows))
-        for _, (col,), kw in self.named("order"):
+        # PostgREST's order: the FIRST column is the primary key (stable sorts, last one first).
+        for _, (col,), kw in reversed(self.named("order")):
             rows.sort(key=lambda r: r[col], reverse=bool(kw.get("desc")))
         for _, (start, end), _ in self.named("range"):
             rows = rows[start:end + 1]
@@ -156,6 +157,11 @@ def _tokens(out):
     return dict(t.split("=", 1) for t in line.split()[2:] if "=" in t)
 
 
+def _orders(query) -> list[tuple[str, bool]]:
+    """(column, descending) of every order() in a query chain, in order."""
+    return [(args[0], bool(kwargs.get("desc"))) for name, args, kwargs in query.ops if name == "order"]
+
+
 # ── the selection ─────────────────────────────────────────────────────────
 
 class SelectionTest(unittest.TestCase):
@@ -169,6 +175,52 @@ class SelectionTest(unittest.TestCase):
         self.assertNotIn("m-001", [r["id"] for r in selected])
         self.assertNotIn("m-002", [r["id"] for r in selected])
         self.assertEqual(MIN_LOGO_LUMINANCE, 0.10)
+
+    def test_the_page_reads_follow_the_index_luminance_then_id_ascending(self):
+        # B4.1: the order the index on (title_logo_luminance, id) holds, so even a generic
+        # plan reads it by the index instead of walking media_pkey with a filter.
+        rows = [_row(i, (0.0, 0.03, 0.01)[i % 3]) for i in range(1, 8)]
+        db = _Db(rows)
+        with mock.patch.object(mod, "PAGE_SIZE", 3), contextlib.redirect_stdout(io.StringIO()):
+            selected = mod.fetch_dark(db)
+        self.assertEqual(len(db.reads), 3)                                  # 7 rows in pages of 3
+        for q in db.reads:
+            self.assertEqual(_orders(q), [("title_logo_luminance", False), ("id", False)])
+        self.assertEqual(sorted(r["id"] for r in selected), sorted(r["id"] for r in rows))   # still read whole
+        # Positive controls: B4's single order by id, and a descending luminance, both fail the pin.
+        self.assertNotEqual(_orders(_Query(db).select("id").order("id")),
+                            [("title_logo_luminance", False), ("id", False)])
+        self.assertNotEqual(_orders(_Query(db).select("id").order("title_logo_luminance", desc=True).order("id")),
+                            [("title_logo_luminance", False), ("id", False)])
+
+    def test_the_pages_hold_the_whole_selection_once_in_the_indexs_order(self):
+        rows = [_row(1, 0.05), _row(2, 0.0), _row(3, 0.05), _row(4, 0.02), _row(5, 0.0)]
+        db = _Db(rows)
+        seen = []
+        real = _Query.execute
+
+        def recording(query):
+            result = real(query)
+            if query.named("select") and not query.named("select")[0][2].get("count"):
+                seen.extend(r["id"] for r in result.data)
+            return result
+
+        with mock.patch.object(mod, "PAGE_SIZE", 2), mock.patch.object(_Query, "execute", recording), \
+                contextlib.redirect_stdout(io.StringIO()):
+            mod.fetch_dark(db)
+        self.assertEqual(seen, ["m-002", "m-005", "m-004", "m-001", "m-003"])  # luminance, then id; each once
+
+    def test_the_walk_is_by_popularity_whatever_order_the_pages_came_in(self):
+        # The darkest first in the index's order; the most popular first in the walk.
+        rows = [_row(1, 0.00, popularity=1), _row(2, 0.01, popularity=90), _row(3, 0.02, popularity=40),
+                _row(4, 0.03, popularity=90)]
+        db = _Db(rows)
+        tmdb = _Tmdb({})
+        _run(db, tmdb, _Measure({}))
+        self.assertEqual([t for t, _ in tmdb.calls], [1002, 1004, 1003, 1001])   # popularity, id breaking the tie
+        # Positive control: that is not the order the pages were read in (the luminance's).
+        read = [r["id"] for r in sorted(rows, key=lambda r: (r["title_logo_luminance"], r["id"]))]
+        self.assertNotEqual([f"m-{t - 1000:03d}" for t, _ in tmdb.calls], read)
 
     def test_read_whole_before_any_write_in_popularity_order_with_id_breaking_ties(self):
         rows = [_row(1, 0.01, popularity=5), _row(2, 0.01, popularity=50), _row(3, 0.01, popularity=50),

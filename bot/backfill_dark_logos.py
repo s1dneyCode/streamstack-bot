@@ -79,12 +79,21 @@ def _dark(query):
 
 def fetch_dark(db) -> list[dict]:
     """Every dark row, read whole before any write, in popularity order
-    (highest first, id breaking ties)."""
+    (highest first, id breaking ties).
+
+    The pages are read in the order the index on (title_logo_luminance, id)
+    holds (migration 20261029024854, B4.1). The first dispatch read them by
+    id alone, and with no index on the luminance yet the planner walked
+    media_pkey and filtered: 31,423 rows for 1,000 kept, 10.2 s, over the
+    authenticator's 8 s statement timeout (57014). The index serves the
+    custom plan either way; in its own order it serves a generic plan too,
+    with the luminance as its index condition, instead of a pkey walk."""
     rows: list[dict] = []
     offset = 0
     while True:
         batch = (
             _dark(db.client.table("media").select(COLUMNS))
+            .order("title_logo_luminance")
             .order("id")
             .range(offset, offset + PAGE_SIZE - 1)
             .execute()
