@@ -25,6 +25,7 @@ on:
           - runtime
           - title-logos
           - title-logo-luminance
+          - dark-logos
           - backdrops
           - certifications
           - seasons
@@ -370,6 +371,24 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m bot.backfill_title_logo_luminance
+
+  backfill-dark-logos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    if: github.event.inputs.job == 'dark-logos'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Backfill dark title logos
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python -m bot.backfill_dark_logos
 
   backfill-backdrops:
     runs-on: ubuntu-latest

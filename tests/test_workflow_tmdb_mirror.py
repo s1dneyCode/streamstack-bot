@@ -31,7 +31,8 @@ RUN_LINE = "python -m bot.tmdb_mirror"
 # media.title_logo_url (a value, not the null a bare upsert_media writes) or
 # media_credits.profile_path — as RUN B5.9 measured them (file:line in its report).
 IMAGE_WRITERS = frozenset({"main", "enrich_new_titles", "backfill_backdrops", "backfill_title_logos",
-                           "backfill_credits", "backfill_cast_photos", "backfill_cast_characters"})
+                           "backfill_credits", "backfill_cast_photos", "backfill_cast_characters",
+                           "backfill_dark_logos"})   # B4: it writes title_logo_url (Backfills)
 # The house's daily crons the fallback must follow: every scheduled workflow but the two
 # image jobs (Posters HD hourly, and this one).
 NOT_THE_NIGHTLY_CHAIN = {"posters_hd.yml", "tmdb_mirror.yml"}
