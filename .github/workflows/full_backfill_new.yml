@@ -101,7 +101,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m bot.backfill_states
+        run: python -m bot.backfill_states --skip-theatres
 
       - name: 12 - Cleanup short films
         env:

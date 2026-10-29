@@ -1,20 +1,25 @@
 """
-One-time backfill: fix is_in_theatres and is_streamable_now for all existing titles.
+Backfill: recompute is_streamable_now for every title, one update for each
+row whose flags differ. A title is streamable when it has ANY
+streaming_availability row (any region, rent and buy included).
 
-Rules applied:
-  Titles with streaming providers     → is_streamable_now=True,  is_in_theatres=False
-  Everything else                     → both False
+What each mode writes today:
+  --skip-theatres   is_streamable_now only; is_in_theatres is left as it is.
+                    Every workflow runs it this way: backfills.yml, and since
+                    B4 step 11 of full_backfill_new.yml and step 4 of
+                    full_backfill_after_bulkimport.yml
+                    (tests/test_workflow_backfill_states.py pins it).
+  no flag           also is_in_theatres = False, on every title it updates —
+                    and a title in theatres always differs from that, so a run
+                    without the flag empties the New in Theatres rail until
+                    daily_verify.py runs again.
 
-is_in_theatres is never set to True here — daily_verify.py (TMDB
-/movie/now_playing, runs daily at 8am UTC) is the only source of truth for it.
-
-Pass --skip-theatres to leave is_in_theatres untouched entirely (only
-is_streamable_now is updated), so this backfill doesn't clobber the fresh
-flags daily_verify.py just set when both run the same day.
+is_in_theatres is daily_verify.py's (TMDb /movie/now_playing, 08:00 UTC): it
+is the one writer that sets it True, and this backfill never does.
 
 Run via:
-    python -m bot.backfill_states
     python -m bot.backfill_states --skip-theatres
+    python -m bot.backfill_states
 """
 
 import os

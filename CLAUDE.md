@@ -62,7 +62,7 @@ Required vars by script vary — `TMDB_API_KEY` + `SUPABASE_URL` + `SUPABASE_KEY
    - For genuinely new titles: fetch detail + watch providers + release dates, upsert (Step 9)
    - Re-verify streaming providers for existing titles due for a check (Step 10) — see staleness logic below
    - Refresh popularity scores and RT scores for the same due-for-recheck set (Steps 10b, 11, 11b)
-   - Sync `is_in_theatres` from the now-playing list (Step 13)
+   - Leave `is_in_theatres` alone: Step 13, which synced it from the now-playing list, is gone, and `daily_verify.py` (08:00 UTC) owns the flag. `backfill_states.py` writes `is_in_theatres = False` on every title it updates unless it gets `--skip-theatres`, and every workflow passes the flag since B4 (`tests/test_workflow_backfill_states.py` pins it), so no sequence empties the New in Theatres rail
    - Detect new seasons/episodes for `Returning Series` shows (Steps 14, 17, 17b)
 
    The step numbers have gaps (10, 14-16 were removed/replaced) — this is intentional history, not a bug; don't "fix" the numbering.
