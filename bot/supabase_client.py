@@ -29,7 +29,8 @@ Expected schema (create once in the Supabase dashboard / migrations):
                                       -- enrichment (since B3.1). Used to say "always
                                       -- False for now", stale since daily_verify.py
         is_streamable_now boolean
-        title_logo_url  text          -- TMDb w500 logo, English first; NULL if TMDb has none
+        title_logo_url  text          -- TMDb w500 logo: the lightest English one (else any) at or above the
+                                      -- app's line, logo_luminance.choose_logo (B4); NULL if TMDb has none
                                       -- (added 2026-10 — previously not listed here)
         title_logo_luminance real     -- 0..1, the logo's luminance over black, CHECK 0..1;
                                       -- bot/logo_luminance.py is the one definition;
