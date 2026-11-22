@@ -148,7 +148,10 @@ class PolicyTableTest(unittest.TestCase):
     def test_nothing_else_is_guessed(self):
         for name in ("", "posters/", "posters/.jpg", "carousels/603/0/1.jpg", "seasons/1399/1/2.jpg",
                      "tmdb/w185/", "tmdb/w185/a/b.jpg", "media-images/posters/603.jpg", "/posters/603.jpg",
-                     "posters/603.jpg/", "other/603.jpg"):
+                     "posters/603.jpg/", "other/603.jpg",
+                     # The review of RUN B5.10: one name beside each part of a shape a one-token change would loosen.
+                     "seasons/1399/a.jpg", "posters/abc/kvuN.jpg", "posters-hd/603/kvuN.png", "tmdb/w185/a?b.jpg",
+                     "tmdb/w/abc.jpg"):
             with self.subTest(name=name):
                 self.assertIsNone(policy.cache_seconds_for(name))
 
