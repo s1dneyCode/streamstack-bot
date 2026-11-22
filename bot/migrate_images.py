@@ -15,6 +15,7 @@ import requests
 
 from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
+from .image_cache_policy import cache_seconds_for
 
 BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
 POSTER_BASE   = "https://image.tmdb.org/t/p/w500"
@@ -112,7 +113,8 @@ def refresh_poster(db: SupabaseClient, tmdb_id: int, media_id, fresh_tmdb_poster
     if not stem:
         return None
 
-    url = db.upload_image(BUCKET, f"posters/{tmdb_id}/{stem}.jpg", image_bytes)
+    url = db.upload_image(BUCKET, (key := f"posters/{tmdb_id}/{stem}.jpg"), image_bytes,
+                          cache_seconds=cache_seconds_for(key))
     if not url:
         return None
 
@@ -136,7 +138,8 @@ def migrate_poster(db: SupabaseClient, tmdb_id: int, title: str, poster_path: st
     if not image_bytes:
         return None
 
-    url = db.upload_image(BUCKET, f"posters/{tmdb_id}.jpg", image_bytes)
+    url = db.upload_image(BUCKET, (key := f"posters/{tmdb_id}.jpg"), image_bytes,
+                          cache_seconds=cache_seconds_for(key))
     if url:
         db.client.table("media").update({"poster_url": url}).eq("tmdb_id", tmdb_id).execute()
     return url
@@ -162,7 +165,8 @@ def migrate_carousel(db: SupabaseClient, tmdb: TmdbClient, tmdb_id: int, title: 
         if not image_bytes:
             continue
 
-        url = db.upload_image(BUCKET, f"carousels/{tmdb_id}/{index}.jpg", image_bytes)
+        url = db.upload_image(BUCKET, (key := f"carousels/{tmdb_id}/{index}.jpg"), image_bytes,
+                              cache_seconds=cache_seconds_for(key))
         if url:
             urls.append(url)
 

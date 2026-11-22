@@ -96,7 +96,7 @@ POSTER_HD_MIGRATION = "20261027200000"
 # which the app's image cache reads as zero validity. A year is safe only for
 # a key versioned by its content (a TMDb file name, or its stem): a changed
 # image gets a new key. bot/tmdb_mirror.py uses it too.
-ONE_YEAR_CACHE_SECONDS = 31536000
+from .image_cache_policy import ONE_YEAR_CACHE_SECONDS  # B5.10: the policy holds it
 
 # What TMDb's CDN said for a poster's original (the shape of B5.3's
 # ImdbLookup): OK with its bytes; MISSING — 404; ERROR — anything else, with

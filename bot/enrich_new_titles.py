@@ -59,6 +59,7 @@ from .tmdb import TmdbClient
 from .supabase_client import SupabaseClient
 from .migrate_images import migrate_poster, migrate_carousel, download_image
 from .logo_luminance import luminance_for_logo
+from .image_cache_policy import cache_seconds_for
 
 POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 BUCKET      = "media-images"
@@ -365,8 +366,9 @@ def main() -> None:
                             if img:
                                 url = db.upload_image(
                                     BUCKET,
-                                    f"seasons/{tmdb_id}/{s['season_number']}.jpg",
+                                    (key := f"seasons/{tmdb_id}/{s['season_number']}.jpg"),
                                     img,
+                                    cache_seconds=cache_seconds_for(key),
                                 )
                                 if url:
                                     s["poster_url"] = url

@@ -746,15 +746,17 @@ class LongCacheTest(unittest.TestCase):
         self.assertEqual(db.uploads[0]["bytes"], FITS)
         self.assertEqual(db.uploads[0]["options"].get("cache-control"), "31536000")
 
-    def test_enrichments_uploads_keep_todays_options(self):
-        # Positive control: the long cache is Posters HD's, not upload_image's default.
+    def test_enrichments_poster_upload_asks_its_slots_seven_days_not_the_year(self):
+        # Positive control: the long cache is Posters HD's, not upload_image's default. Until B5.10 the
+        # enrichment's poster upload kept today's options; since B5.10 · 0a its slot asks the policy's 7 days.
         from bot import migrate_images
         db = _Db(media=[_media(1)])
         with mock.patch.object(migrate_images, "download_image", lambda url: FITS), \
                 contextlib.redirect_stdout(io.StringIO()):
             url = migrate_images.migrate_poster(db, 1001, "T", "https://image.tmdb.org/t/p/w500/p1.jpg")
         self.assertIsNotNone(url)
-        self.assertEqual([u["options"] for u in db.uploads], [{"content-type": "image/jpeg", "upsert": "true"}])
+        self.assertEqual([u["options"] for u in db.uploads],
+                         [{"content-type": "image/jpeg", "upsert": "true", "cache-control": "604800"}])
 
 
 class RefreshExistingTest(unittest.TestCase):
