@@ -1,0 +1,81 @@
+# Image Recache (B5.10): every object in media-images that still carries
+# cacheControl = no-cache gets the house cache policy, bot/image_cache_policy.py
+# — 7 days for a key that names a slot (posters/<id>.jpg, carousels/<id>/<n>.jpg,
+# seasons/<id>/<n>.jpg; Fran's number, 22/11), a year for a key that names
+# TMDb's file — by uploading its own bytes again under its own key, byte for
+# byte. On 22/11, 625,395 objects (≈ 625,000) were on no-cache, which the app's
+# image cache reads as zero validity: carousels/ 448,425 (33.2 GB), posters/
+# 125,898 (10.6 GB), seasons/ 51,072 (4.7 GB) — 48.5 GB of egress for the whole
+# drain, each object downloaded once. The `prefixes` input is how Fran decides
+# when the carousels go: a dispatch walks the prefixes it lists, in that order;
+# the hourly runs walk the default below, which reaches the carousels after the
+# posters and the seasons.
+# Every run proves the SERVED header first (supabase/storage #1109: a change of
+# the stored value that the public URL never serves): on its first re-upload it
+# reads that object's Cache-Control at its public URL every 5 s for up to 90 s,
+# and the stored value back, and stops red after that one object unless both
+# say the policy's max-age. A cursor in bot_state (image_recache_cursor) carries
+# the walk from run to run; each run stops itself at its time budget or
+# max_objects, inside the job's 90 minutes, with its SUMMARY and the cursor
+# written. The whole drain is ≈ 20 runs of ≈ 27 minutes of Actions; after it, a
+# run ends in seconds with drain_done=1 (restart 'true' walks it again). Hourly
+# at :53, off the top of the hour and away from Posters HD's :41 and TMDb
+# Mirror's 12:23. Needs public.image_cache_page (applied 22/11): without it the
+# first call stops the run, saying so. It never writes media and never deletes
+# a file; its only secrets are the two Supabase ones, on the step that runs the
+# script. It writes no image field TMDb Mirror copies, so it is not in that
+# workflow's workflow_run list.
+name: Image Recache
+
+on:
+  schedule:
+    - cron: '53 * * * *'  # hourly at :53 UTC
+  workflow_dispatch:
+    inputs:
+      prefixes:
+        description: 'Prefixes to walk, in order (posters/, seasons/, carousels/, posters-hd/, tmdb/)'
+        required: false
+        default: 'posters/,seasons/,carousels/'
+      time_budget_min:
+        description: 'Minutes after the start when the run stops itself, with its SUMMARY (at most 80, inside the 90-minute job)'
+        required: false
+        default: '25'
+      max_objects:
+        description: 'Max objects to fetch this run (re-uploaded, refused or failed; done rows are free)'
+        required: false
+        default: '40000'
+      workers:
+        description: 'Objects fetched and uploaded at once (1-16)'
+        required: false
+        default: '6'
+      restart:
+        description: "'true' puts the cursor back at the first prefix (a drain that is done walks again)"
+        required: false
+        default: 'false'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  image-recache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Re-cache images
+        env:
+          PYTHONUNBUFFERED: '1'
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          IMAGE_RECACHE_PREFIXES: ${{ github.event.inputs.prefixes || 'posters/,seasons/,carousels/' }}
+          IMAGE_RECACHE_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '25' }}
+          IMAGE_RECACHE_MAX_OBJECTS: ${{ github.event.inputs.max_objects || '40000' }}
+          IMAGE_RECACHE_WORKERS: ${{ github.event.inputs.workers || '6' }}
+          IMAGE_RECACHE_RESTART: ${{ github.event.inputs.restart || 'false' }}
+        run: python -m bot.image_recache
