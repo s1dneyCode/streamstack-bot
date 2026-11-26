@@ -41,7 +41,7 @@ RUN_LINE = "python -m bot.image_recache"
 INPUTS = (("prefixes", "posters/,seasons/,carousels/", "IMAGE_RECACHE_PREFIXES"),
           ("time_budget_min", "25", "IMAGE_RECACHE_TIME_BUDGET_MIN"),
           ("max_objects", "40000", "IMAGE_RECACHE_MAX_OBJECTS"),
-          ("workers", "6", "IMAGE_RECACHE_WORKERS"),
+          ("workers", "12", "IMAGE_RECACHE_WORKERS"),          # B5.10.1 · 0c: 12 (6 until then)
           ("restart", "false", "IMAGE_RECACHE_RESTART"))
 # B5.10.1 · 0b: the relaunch.
 SCRIPT_STEP = "Re-cache images"
@@ -197,7 +197,13 @@ class ImageRecacheWorkflowTest(unittest.TestCase):
                           image_recache.DEFAULT_IMAGE_RECACHE_TIME_BUDGET_MIN,
                           image_recache.DEFAULT_IMAGE_RECACHE_MAX_OBJECTS,
                           image_recache.DEFAULT_IMAGE_RECACHE_WORKERS),
-                         ("posters/,seasons/,carousels/", 25, 40000, 6))
+                         ("posters/,seasons/,carousels/", 25, 40000, 12))
+        # B5.10.1 · 0c: the workers input says why its default is 12.
+        workers = re.search(r"(?m)^      workers:\n        description: (.+)$", dispatch)
+        self.assertIsNotNone(workers)
+        for words in ("1-16", "12 by default", "latency-bound", "2.6 to 7.7 objects a second at 6"):
+            with self.subTest(workers_description=words):
+                self.assertIn(words, workers.group(1) if workers else "")
 
     def test_one_run_at_a_time(self):
         block = r"(?m)^concurrency:\n  group: \$\{\{ github\.workflow \}\}\n  cancel-in-progress: false$"

@@ -70,9 +70,9 @@ on:
         required: false
         default: '40000'
       workers:
-        description: 'Objects fetched and uploaded at once (1-16)'
+        description: 'Objects fetched and uploaded at once (1-16; 12 by default: the sweep is latency-bound, 2.6 to 7.7 objects a second at 6)'
         required: false
-        default: '6'
+        default: '12'
       restart:
         description: "'true' puts the cursor back at the first prefix (a drain that is done walks again)"
         required: false
@@ -110,7 +110,7 @@ jobs:
           IMAGE_RECACHE_PREFIXES: ${{ github.event.inputs.prefixes || 'posters/,seasons/,carousels/' }}
           IMAGE_RECACHE_TIME_BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '25' }}
           IMAGE_RECACHE_MAX_OBJECTS: ${{ github.event.inputs.max_objects || '40000' }}
-          IMAGE_RECACHE_WORKERS: ${{ github.event.inputs.workers || '6' }}
+          IMAGE_RECACHE_WORKERS: ${{ github.event.inputs.workers || '12' }}
           IMAGE_RECACHE_RESTART: ${{ github.event.inputs.restart || 'false' }}
         run: python -m bot.image_recache
       - name: Relaunch while the drain is not done
@@ -122,7 +122,7 @@ jobs:
           PREFIXES: ${{ github.event.inputs.prefixes || 'posters/,seasons/,carousels/' }}
           BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '25' }}
           MAX_OBJECTS: ${{ github.event.inputs.max_objects || '40000' }}
-          WORKERS: ${{ github.event.inputs.workers || '6' }}
+          WORKERS: ${{ github.event.inputs.workers || '12' }}
           RETAGGED: ${{ steps.recache.outputs.retagged }}
           REFUSED: ${{ steps.recache.outputs.refused }}
         run: |

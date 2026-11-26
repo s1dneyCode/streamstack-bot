@@ -1208,7 +1208,7 @@ class MainTest(unittest.TestCase):
         seen, exited, _ = self._main(FAKE_ENV)
         self.assertIsNone(exited)
         self.assertEqual((seen.get("prefixes"), seen.get("workers"), seen.get("budget_min"), seen.get("max_objects"),
-                          seen.get("restart")), (("posters/", "seasons/", "carousels/"), 6, 25, 40000, False))
+                          seen.get("restart")), (("posters/", "seasons/", "carousels/"), 12, 25, 40000, False))
         self.assertEqual(seen.get("uploader"), ("db", FAKE_ENV["SUPABASE_URL"], FAKE_ENV["SUPABASE_KEY"]))
         seen, _, _ = self._main({**FAKE_ENV, "IMAGE_RECACHE_PREFIXES": "carousels/", "IMAGE_RECACHE_WORKERS": "16",
                                  "IMAGE_RECACHE_TIME_BUDGET_MIN": "80", "IMAGE_RECACHE_MAX_OBJECTS": "1",
@@ -1217,7 +1217,7 @@ class MainTest(unittest.TestCase):
                           seen.get("restart")), (("carousels/",), 16, 80, 1, True))
         self.assertEqual((mod.DEFAULT_IMAGE_RECACHE_WORKERS, mod.DEFAULT_IMAGE_RECACHE_TIME_BUDGET_MIN,
                           mod.DEFAULT_IMAGE_RECACHE_MAX_OBJECTS, mod.MAX_IMAGE_RECACHE_WORKERS,
-                          mod.MAX_IMAGE_RECACHE_TIME_BUDGET_MIN), (6, 25, 40000, 16, 80))
+                          mod.MAX_IMAGE_RECACHE_TIME_BUDGET_MIN), (12, 25, 40000, 16, 80))   # B5.10.1 · 0c: 12
 
     def test_main_refuses_knobs_outside_their_range_before_any_work(self):
         for key, value in (("IMAGE_RECACHE_WORKERS", "0"), ("IMAGE_RECACHE_WORKERS", "17"),
