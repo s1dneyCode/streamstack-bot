@@ -8,6 +8,10 @@ re-uploaded each run, a gate reads the SERVED Cache-Control back (supabase
 storage #1109: changing the stored value is not changing what the app gets),
 and the stored one, before any worker starts.
 
+RUN B5.10.1 · 0a: what a run hands its workflow — budget_hit, drain_done,
+retagged, refused and cursor, appended to $GITHUB_OUTPUT by main(), a red
+run's too — so the workflow's relaunch step can chain the next run.
+
 Fakes only, in the shape of tests/test_tmdb_mirror.py: a Supabase client whose
 image_cache_page answers from in-memory objects in C order, whose storage
 records every upload behind the REAL SupabaseClient.upload_image (and stores
@@ -25,6 +29,7 @@ import io
 import os
 import pathlib
 import re
+import tempfile
 import threading
 import types
 import unittest
@@ -1248,6 +1253,150 @@ class MainTest(unittest.TestCase):
             except SystemExit as exc:
                 code = exc.code
         self.assertEqual(code, 1)
+
+
+# ── (10) what the workflow reads: $GITHUB_OUTPUT (B5.10.1 · 0a) ───────────
+
+OUTPUT_NAMES = ("budget_hit", "drain_done", "retagged", "refused", "cursor")
+REFUSAL_TERMS = ("fetch_error", "bad_type", "size_mismatch", "etag_mismatch", "errors")
+
+
+def _fake_stats(**over):
+    """A run's stats as _summary returns them, every refusal term non-zero and
+    distinct (1 + 2 + 3 + 4 + 5 = 15), so a dropped term changes the sum."""
+    stats = {"pages": 3, "seen": 47, "already": 8, "skipped_shape": 6, "etag_unchecked": 7, "bytes_down": 900,
+             "bytes_up": 800, "budget_hit": 1, "drain_done": 0, "failed": None, "retagged": 17, "fetch_error": 1,
+             "bad_type": 2, "size_mismatch": 3, "etag_mismatch": 4, "errors": 5,
+             "cursor": "posters/:posters/19877.jpg"}
+    return {**stats, **over}
+
+
+def _read_lines(path):
+    with open(path, encoding="utf-8") as handle:
+        return handle.read().splitlines()
+
+
+def _outputs(stats) -> dict:
+    """What write_outputs puts in a fresh file, as {name: value}."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "github_output")
+        mod.write_outputs(stats, path)
+        lines = _read_lines(path) if os.path.exists(path) else []
+    return dict(line.split("=", 1) for line in lines if "=" in line)
+
+
+class OutputsTest(unittest.TestCase):
+
+    def test_the_five_lines_are_appended_after_what_the_file_already_holds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "github_output")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("earlier=kept\n")
+            mod.write_outputs(_fake_stats(), path)
+            lines = _read_lines(path)
+        self.assertEqual(lines[:1], ["earlier=kept"])                            # positive control: never truncated
+        self.assertEqual(lines[1:], ["budget_hit=1", "drain_done=0", "retagged=17", "refused=15",
+                                     "cursor=posters/:posters/19877.jpg"])
+
+    def test_no_path_writes_nothing(self):
+        with mock.patch.object(mod, "open", side_effect=AssertionError("a file was opened"), create=True) as opened:
+            mod.write_outputs(_fake_stats(), None)
+        self.assertFalse(opened.called)
+        # Positive control beside it: a path writes the five lines.
+        self.assertEqual(sorted(_outputs(_fake_stats())), sorted(OUTPUT_NAMES))
+
+    def test_refused_is_every_refusal_plus_the_errors_and_nothing_else(self):
+        stats = _fake_stats()
+        self.assertTrue(all(stats[term] for term in REFUSAL_TERMS))
+        self.assertEqual(len({stats[term] for term in REFUSAL_TERMS}), len(REFUSAL_TERMS))
+        self.assertEqual(_outputs(stats).get("refused"), str(sum(stats[term] for term in REFUSAL_TERMS)))   # 15
+        for term in REFUSAL_TERMS:
+            with self.subTest(term=term):                                        # each term moves it
+                self.assertEqual(_outputs(_fake_stats(**{term: stats[term] + 100})).get("refused"), "115")
+        # Positive control: what is not a refusal does not move it.
+        for other in ("already", "skipped_shape", "etag_unchecked", "retagged"):
+            with self.subTest(other=other):
+                self.assertEqual(_outputs(_fake_stats(**{other: stats[other] + 100})).get("refused"), "15")
+
+    def test_the_cursor_is_the_summarys_cursor_field(self):
+        objects = _objects(POSTERS[:3])
+        objects.update(_objects(["posters/4.jpg"], cache_control="max-age=604800"))
+        cases = (("a cut mid-prefix", _Db(_objects(POSTERS)), {"max_objects": 3}, "posters/:posters/3.jpg"),
+                 ("a drain done", _Db(objects), {}, "posters/:posters/4.jpg"),
+                 ("a gate stop", _Db(_objects(POSTERS[:2]), served_follows=False), {}, "posters/:"),
+                 ("a resumed cursor", _Db(_objects(POSTERS),
+                                          cursor={"prefix": "posters/", "after": "posters/5.jpg", "done_at": None}),
+                  {"max_objects": 1}, "posters/:posters/6.jpg"))
+        for label, db, knobs, expected in cases:
+            with self.subTest(case=label):
+                stats, out, _ = _run(db, **knobs)
+                self.assertEqual(_tokens(out).get("cursor"), expected)           # positive control: the SUMMARY's
+                self.assertEqual(stats.get("cursor"), _tokens(out).get("cursor"))
+                self.assertEqual(_outputs(stats).get("cursor"), expected)
+
+    # main(): the lines reach $GITHUB_OUTPUT, a red run's too
+
+    def _main_with_output(self, *, run=None, db=None, env=None):
+        """main() with a tmp GITHUB_OUTPUT: *run* replaces run(), or the real
+        run() goes through *db* and its CDN. Returns the file's lines, the
+        exit code (None when it returns) and the output."""
+        out = io.StringIO()
+        clock = _Clock()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "github_output")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("earlier=kept\n")
+            patches = [mock.patch.dict(os.environ, {**FAKE_ENV, **(env or {}), "GITHUB_OUTPUT": path}, clear=True),
+                       mock.patch.object(mod, "SupabaseClient",
+                                         (lambda url, key: db) if db is not None else (lambda url, key: ("db", url, key)))]
+            if run is not None:
+                patches.append(mock.patch.object(mod, "run", run))
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(contextlib.redirect_stdout(out))
+                stack.enter_context(contextlib.redirect_stderr(out))
+                try:
+                    mod.main(clock=clock, fetch=_Cdn(db) if db is not None else None, sleep=clock.sleep)
+                    code = None
+                except SystemExit as exc:
+                    code = exc.code
+            lines = _read_lines(path)
+        return lines, code, out.getvalue()
+
+    def test_main_appends_the_lines_after_run(self):
+        lines, code, _ = self._main_with_output(run=lambda db, **kwargs: _fake_stats())
+        self.assertIsNone(code)
+        self.assertEqual(lines, ["earlier=kept", "budget_hit=1", "drain_done=0", "retagged=17", "refused=15",
+                                 "cursor=posters/:posters/19877.jpg"])
+
+    def test_a_red_run_writes_its_lines_and_still_exits_1(self):
+        lines, code, _ = self._main_with_output(run=lambda db, **kwargs: _fake_stats(failed="gate", budget_hit=0))
+        self.assertEqual(code, 1)
+        self.assertEqual(lines[1:], ["budget_hit=0", "drain_done=0", "retagged=17", "refused=15",
+                                     "cursor=posters/:posters/19877.jpg"])
+
+    def test_main_through_the_fakes_writes_what_its_summary_says(self):
+        db = _Db(_objects(POSTERS))
+        lines, code, out = self._main_with_output(db=db, env={"IMAGE_RECACHE_PREFIXES": "posters/",
+                                                              "IMAGE_RECACHE_MAX_OBJECTS": "3",
+                                                              "IMAGE_RECACHE_WORKERS": "2"})
+        self.assertIsNone(code)
+        tokens = _tokens(out)
+        self.assertEqual(lines, ["earlier=kept", "budget_hit=1", "drain_done=0", "retagged=3", "refused=0",
+                                 "cursor=posters/:posters/3.jpg"])
+        self.assertEqual([lines[1], lines[2], lines[3], lines[5]],
+                         [f"budget_hit={tokens.get('budget_hit')}", f"drain_done={tokens.get('drain_done')}",
+                          f"retagged={tokens.get('retagged')}", f"cursor={tokens.get('cursor')}"])
+        self.assertEqual(len(db.uploads), 3)                                     # positive control: a real run
+
+    def test_a_red_run_through_the_fakes_writes_its_lines_and_exits_1(self):
+        db = _Db(_objects(POSTERS[:2]), served_follows=False)                    # the gate fails
+        lines, code, out = self._main_with_output(db=db, env={"IMAGE_RECACHE_PREFIXES": "posters/"})
+        self.assertEqual(code, 1)
+        self.assertEqual(len(_gate_lines(out)), 1)
+        self.assertEqual(lines, ["earlier=kept", "budget_hit=0", "drain_done=0", "retagged=1", "refused=0",
+                                 f"cursor={_tokens(out).get('cursor')}"])
 
 
 if __name__ == "__main__":

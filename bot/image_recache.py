@@ -591,6 +591,7 @@ def _summary(stats: dict, prefixes, position: dict, clock, started) -> dict:
     elapsed = (clock() - started).total_seconds()
     retagged = stats[RETAGGED]
     per_s = f"{retagged / elapsed:.1f}" if retagged and elapsed > 0 else "-"
+    stats["cursor"] = f"{position['prefix']}:{position['after']}"   # B5.10.1: what write_outputs hands the workflow
     print(
         f"[IMAGE_RECACHE] SUMMARY prefixes={','.join(prefixes or ())} pages={stats['pages']} seen={stats['seen']} "
         f"already={stats['already']} retagged={retagged} skipped_shape={stats['skipped_shape']} "
@@ -598,10 +599,26 @@ def _summary(stats: dict, prefixes, position: dict, clock, started) -> dict:
         f"etag_mismatch={stats[ETAG_MISMATCH]} etag_unchecked={stats['etag_unchecked']} errors={stats[ERROR]} "
         f"bytes_down={stats['bytes_down']} bytes_up={stats['bytes_up']} objects_per_s={per_s} "
         f"budget_hit={stats['budget_hit']} drain_done={stats['drain_done']} "
-        f"cursor={position['prefix']}:{position['after']}",
+        f"cursor={stats['cursor']}",
         flush=True,
     )
     return stats
+
+
+def write_outputs(stats: dict, path: str | None) -> None:
+    """How the run ended, for the workflow (B5.10.1): appends — never
+    truncates — budget_hit, drain_done, retagged, refused (every refusal plus
+    the failed uploads: fetch_error + bad_type + size_mismatch +
+    etag_mismatch + errors) and cursor, one name=value a line, to the file at
+    *path* ($GITHUB_OUTPUT); its relaunch step reads them. No path (a local
+    run has no $GITHUB_OUTPUT) writes nothing."""
+    if not path:
+        return
+    refused = sum(stats[term] for term in (FETCH_ERROR, BAD_TYPE, SIZE_MISMATCH, ETAG_MISMATCH, ERROR))
+    lines = (f"budget_hit={stats['budget_hit']}", f"drain_done={stats['drain_done']}",
+             f"retagged={stats[RETAGGED]}", f"refused={refused}", f"cursor={stats['cursor']}")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("".join(f"{line}\n" for line in lines))
 
 
 def _knob(name: str, default: int, low: int, high: int | None) -> int:
@@ -646,6 +663,7 @@ def main(clock=None, fetch=None, sleep=None) -> None:
                 fetch=fetch if fetch is not None else requests.get, clock=clock,
                 sleep=sleep if sleep is not None else time.sleep, prefixes=prefixes, workers=workers,
                 budget_min=budget_min, max_objects=max_objects, restart=restart)
+    write_outputs(stats, os.environ.get("GITHUB_OUTPUT"))   # before the red exit: a red run's numbers are read too
     if stats.get("failed"):
         sys.exit(1)  # said above, after the SUMMARY: the run is red
 
