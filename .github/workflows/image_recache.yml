@@ -25,6 +25,31 @@
 # a file; its only secrets are the two Supabase ones, on the step that runs the
 # script. It writes no image field TMDb Mirror copies, so it is not in that
 # workflow's workflow_run list.
+#
+# B5.10.1 — the drain relaunches itself. Measured on 26/11: ten scheduled runs
+# in 3.7 days against twenty-four windows a day (GitHub fired about three a day,
+# 8 to 12 hours apart, and no run was lost in between: the empty hours are runs
+# it never started), each 4,000 to 11,600 objects (2.6 to 7.7 a second at 6
+# workers; latency-bound) — not B5.10's ≈ 20 runs: ≈ 27 days of drain at that
+# pace. So a hop: a run whose budget ends with the drain not done (budget_hit=1
+# and drain_done=0, which the script appends to $GITHUB_OUTPUT) dispatches the
+# next run itself, with its own knobs, restart 'false' always and chain_left one
+# less. A hop does not relaunch when chain_left is not a whole number; when it
+# is 0 (the chain is exhausted); when it refused as much as it retagged (a CDN
+# or Storage outage must not walk the cursor through 48 hops of refusals); or
+# when a run is already waiting in this workflow's queue (one run at a time
+# keeps one pending run and cancels the older; the waiting one takes the drain
+# with its own knobs and chain_left — a scheduled one with the defaults and 48,
+# a dispatch left at '0' for one run). A red hop never relaunches and stays visible.
+# A dispatch is one run unless it asks for a chain (chain_left defaults to '0'; a
+# box left empty reads as 48, like the schedule); the hourly schedule, which has
+# no inputs, chains with 48, so it remains the backstop and the restarter of a
+# chain that stopped. drain_done=1 on a list that ends with the cursor's prefix
+# (the hourly list ends with carousels/) ends chains for good; a dispatch's
+# shorter list ends only its own chain, and the next hourly run walks on. Cost:
+# ≈ 27 Actions minutes a hop (1.5 of them setup), ≈ 47 hops and ≈ 1,300 minutes
+# for the drain at 12 workers (B5.10.1's default), ≈ 21 hours back to back; on
+# a private repository those minutes count against the plan's.
 name: Image Recache
 
 on:
@@ -52,10 +77,18 @@ on:
         description: "'true' puts the cursor back at the first prefix (a drain that is done walks again)"
         required: false
         default: 'false'
+      chain_left:
+        description: "Hops this run may add after itself while its budget ends with the drain not done ('0' = this run only; the hourly runs use 48)"
+        required: false
+        default: '0'
 
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   image-recache:
@@ -69,6 +102,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Re-cache images
+        id: recache
         env:
           PYTHONUNBUFFERED: '1'
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -79,3 +113,36 @@ jobs:
           IMAGE_RECACHE_WORKERS: ${{ github.event.inputs.workers || '6' }}
           IMAGE_RECACHE_RESTART: ${{ github.event.inputs.restart || 'false' }}
         run: python -m bot.image_recache
+      - name: Relaunch while the drain is not done
+        if: success() && steps.recache.outputs.budget_hit == '1' && steps.recache.outputs.drain_done == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CHAIN_LEFT: ${{ github.event.inputs.chain_left || '48' }}
+          PREFIXES: ${{ github.event.inputs.prefixes || 'posters/,seasons/,carousels/' }}
+          BUDGET_MIN: ${{ github.event.inputs.time_budget_min || '25' }}
+          MAX_OBJECTS: ${{ github.event.inputs.max_objects || '40000' }}
+          WORKERS: ${{ github.event.inputs.workers || '6' }}
+          RETAGGED: ${{ steps.recache.outputs.retagged }}
+          REFUSED: ${{ steps.recache.outputs.refused }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$CHAIN_LEFT" =~ ^(0|[1-9][0-9]*)$ ]]; then
+            echo "[IMAGE_RECACHE] chain_left '$CHAIN_LEFT' is not a whole number; no relaunch"
+            exit 0
+          fi
+          if (( CHAIN_LEFT == 0 )); then
+            echo "[IMAGE_RECACHE] chain exhausted; the hourly run takes it from here"
+            exit 0
+          fi
+          if (( RETAGGED <= REFUSED )); then
+            echo "[IMAGE_RECACHE] retagged=$RETAGGED refused=$REFUSED: this hop refused as much as it retagged; the hourly run tries again"
+            exit 0
+          fi
+          waiting=$(gh run list --workflow image_recache.yml --limit 20 --json status --jq '[.[] | select(.status == "queued" or .status == "pending" or .status == "waiting" or .status == "requested")] | length')
+          if [ "$waiting" != "0" ]; then
+            echo "[IMAGE_RECACHE] $waiting run(s) waiting: a run is already waiting; it takes the drain from here"
+            exit 0
+          fi
+          gh workflow run image_recache.yml --ref "$GITHUB_REF_NAME" -f "prefixes=$PREFIXES" -f "time_budget_min=$BUDGET_MIN" -f "max_objects=$MAX_OBJECTS" -f "workers=$WORKERS" -f restart=false -f "chain_left=$((CHAIN_LEFT - 1))"
+          echo "[IMAGE_RECACHE] relaunched: the next hop is dispatched with $((CHAIN_LEFT - 1)) left"
